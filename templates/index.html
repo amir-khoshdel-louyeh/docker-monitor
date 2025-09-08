@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Docker Monitor Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <header>Docker Monitor Dashboard</header>
+    <div class="container">
+        <h2>Container Controls</h2>
+
+        <div class="global-controls">
+            <button onclick="sendGlobalAction('pause')">Pause All</button>
+            <button onclick="sendGlobalAction('unpause')">Unpause All</button>
+            <button onclick="sendGlobalAction('restart')">Restart All</button>
+            <button onclick="sendGlobalAction('remove')">Remove All</button>
+
+            <button onclick="killAndRemove()">Kill & Remove All</button>
+            <button onclick="testEnvironment()">Test Environment</button>
+        </div>
+
+        <h2>Container Status</h2>
+        <table border="1" cellspacing="0" cellpadding="10" style="margin: auto;">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>CPU (%)</th>
+                    <th>RAM (%)</th>
+                    <th>Controls</th>
+                </tr>
+            </thead>
+            <tbody id="container-body"></tbody>
+        </table>
+
+        <h3>Logs</h3>
+        <div id="logbox" style="width:80%; height:200px; margin:auto; border:1px solid #ccc; background:#f9f9f9; padding:10px; overflow-y:scroll; font-family: monospace; text-align: left;"></div>
+    </div>
+
+    <script>
+    // ---------- Container Controls ----------
+    function sendAction(action, name) {
+        fetch('/control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action, name: name })
+        }).then(r => r.json()).then(data => alert(data.status));
+    }
+
+    function sendGlobalAction(action) {
+        fetch('/control_all', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: action })
+        }).then(r => r.json()).then(data => alert(data.status));
+    }
+
+    function killAndRemove() {
+        fetch('/kill_remove', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => alert(data.status));
+    }
+
+    function testEnvironment() {
+        fetch('/test_environment', { method: 'POST' })
+            .then(r => r.json())
+            .then(data => alert(data.status || 'Test completed'));
+    }
+
+    // ---------- Logs ----------
+    function fetchLogs() {
+        fetch('/logs')
+            .then(r => r.json())
+            .then(logs => {
+                const logbox = document.getElementById('logbox');
+                logbox.innerHTML = logs.join('<br>');
+                logbox.scrollTop = logbox.scrollHeight;
+            });
+    }
+
+    // ---------- Streaming Stats ----------
+    function initStream() {
+        const tbody = document.getElementById("container-body");
+        const eventSource = new EventSource("/stream");
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            let row = document.getElementById("row-" + data.name);
+
+            if (!row) {
+                row = document.createElement("tr");
+                row.id = "row-" + data.name;
+                row.innerHTML = `
+                    <td class="name">${data.name}</td>
+                    <td class="status">${data.status}</td>
+                    <td class="cpu">${data.cpu}</td>
+                    <td class="ram">${data.ram}</td>
+                    <td>
+                        <button onclick="sendAction('pause', '${data.name}')">Pause</button>
+                        <button onclick="sendAction('unpause', '${data.name}')">Unpause</button>
+                        <button onclick="sendAction('restart', '${data.name}')">Restart</button>
+                        <button onclick="sendAction('remove', '${data.name}')">Remove</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            } else {
+                row.querySelector(".status").textContent = data.status;
+                row.querySelector(".cpu").textContent = data.cpu;
+                row.querySelector(".ram").textContent = data.ram;
+            }
+        };
+    }
+
+    // ---------- Full table refresh (every 60 seconds to catch removed containers) ----------
+    function updateContainerStats() {
+        fetch('/container_stats')
+            .then(res => res.json())
+            .then(data => {
+                const tbody = document.getElementById('container-body');
+                tbody.innerHTML = ''; // clear everything
+                data.forEach(container => {
+                    const row = document.createElement('tr');
+                    row.id = "row-" + container.name;
+                    row.innerHTML = `
+                        <td class="name">${container.name}</td>
+                        <td class="status">${container.status}</td>
+                        <td class="cpu">${container.cpu}</td>
+                        <td class="ram">${container.ram}</td>
+                        <td>
+                            <button onclick="sendAction('pause', '${container.name}')">Pause</button>
+                            <button onclick="sendAction('unpause', '${container.name}')">Unpause</button>
+                            <button onclick="sendAction('restart', '${container.name}')">Restart</button>
+                            <button onclick="sendAction('remove', '${container.name}')">Remove</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            });
+    }
+
+    // ---------- Init ----------
+    fetchLogs();
+    setInterval(fetchLogs, 10000);           // refresh logs every 10s
+    initStream();                            // live updates via SSE
+    updateContainerStats();                  // initial table load
+    setInterval(updateContainerStats, 60000); // refresh full table every 60s
+</script>
+
+</body>
+</html>
+
+
