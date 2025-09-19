@@ -9,6 +9,8 @@ import socket
 import webbrowser
 import subprocess
 import json
+import concurrent.futures
+import argparse
 
 
 
@@ -79,7 +81,6 @@ def pause_container(container):
     try:
         if container.status == 'running':
             container.pause()
-            #logging.info(f"Paused container '{name}' was successfully.")
     except Exception as Error:
         logging.error(f"Failed to pause container '{name}': {Error}")
 
@@ -101,7 +102,8 @@ def delete_clones(container):
     for clone in existing_clones:
         clone_name = clone.name
         try:
-            clone.remove(force=True)
+            clone.stop()
+            clone.remove()
             logging.info(f"Deleted clone container {clone_name}.")
         except Exception as Error:
             logging.error(f"Failed to delete clone container {clone_name}: {Error}")
@@ -149,7 +151,6 @@ def scale_container(container):
 
 
 def monitor():
-    #logging.info("Docker Monitor Service started. Monitoring containers...")
     while True:
         containers = client.containers.list(all=True)
         for container in containers:
@@ -158,16 +159,14 @@ def monitor():
             container_status = container.status
 
             logging.info(f"Checking container: {container_name}... START")
-            #logging.info(f"Container {container_name} status: {container_status}")
 
-            if container_status != 'running' and container_status != 'paused':
+            if False: #container_status != 'running' and container_status != 'paused'
                 logging.info(f"Restarting inactive container: {container_name}... START")
                 try:
                     container.restart()
                     logging.info(f"Container {container_name} restarted successfully.")
                 except Exception as Error:
                     logging.error(f"Failed to restart container {container_name}: {Error}")
-                #logging.info(f"Restarting inactive container: {name}... DONE")
             else:
                 CPU_percent = CPU_usage(container)
                 RAM_percent = RAM_usage(container)
@@ -182,9 +181,7 @@ def monitor():
                         continue
                     logging.info(f"Container {container_name} overloaded (CPU: {CPU_percent:.2f}%, Memory: {RAM_percent:.2f}%). Attempting to scale...")
                     scale_container(container)
-            #logging.info(f"Checking container: {container_name}... DONE")
 
-        #logging.info(f"Sleeping {SLEEP_TIME} seconds before next check...")
         time.sleep(SLEEP_TIME)
 
 
@@ -266,7 +263,10 @@ def control():
         elif action == 'restart':
             container.restart()
         elif action == 'remove':
-            container.remove(force=True)
+            container.stop()
+            container.remove()
+        elif action == 'stop':
+            container.stop()
         else:
             return jsonify({'status': 'error', 'message': 'Unknown action'}), 400
 
@@ -289,10 +289,13 @@ def control_all():
                 container.pause()
             elif action == 'unpause' and container.status == 'paused':
                 container.unpause()
+            elif action == 'stop' and container.status == 'running':
+                container.stop()
             elif action == 'restart':
                 container.restart()
             elif action == 'remove':
-                container.remove(force=True)
+                container.stop()
+                container.remove()
         logging.info(f"User requested '{action}' on ALL containers.")
         return jsonify({'status': f'{action.capitalize()} All executed'})
     except Exception as Error:
@@ -301,6 +304,32 @@ def control_all():
 
 
 
+
+
+@app.route('/run_command', methods=['POST'])
+def run_command():
+    """
+    Executes a shell command.
+    SECURITY WARNING: This is a powerful feature. It is restricted to 'docker run'
+    to prevent arbitrary code execution, but still poses a risk.
+    """
+    command_str = request.json.get('command')
+    if not command_str:
+        return jsonify({'status': 'error', 'message': 'No command provided', 'output': ''}), 400
+
+    # Basic security check to only allow 'docker run'
+    if not command_str.strip().startswith('docker run'):
+        msg = "Security error: Only 'docker run' commands are allowed."
+        logging.warning(msg)
+        return jsonify({'status': 'error', 'message': msg, 'output': ''}), 403
+
+    try:
+        logging.info(f"Executing user command: {command_str}")
+        result = subprocess.run(command_str, shell=True, check=True, capture_output=True, text=True)
+        return jsonify({'status': 'success', 'message': 'Command executed', 'output': result.stdout or result.stderr})
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Command failed: {e.stderr}")
+        return jsonify({'status': 'error', 'message': 'Command failed', 'output': e.stderr}), 500
 
 
 @app.route('/stream')
@@ -314,42 +343,26 @@ def stream():
 
 
 
-@app.route('/kill_remove', methods=['POST'])
-def kill_and_remove():
+def open_browser(port):
+    """Opens the default web browser to the specified URL."""
+    url = f'http://127.0.0.1:{port}/'
     try:
-        logging.info("User executed kill and remove script.")
-        result = subprocess.run(['sudo', '/home/amir/Github/docker_monitor/docker-kill-remove.sh'], capture_output=True, text=True)
-        return jsonify(status=result.stdout or result.stderr)
-    except Exception as Error:
-        logging.error(f"Kill and remove script error: {Error}")
-        return jsonify(status=f"Error: {str(Error)}")
-
-
-
-
-@app.route('/test_environment', methods=['POST'])
-def test_environment():
-    try:
-        logging.info("User executed test environment setup script.")
-        result = subprocess.run(['sudo', '/home/amir/Github/docker_monitor/setup_test_env.sh'], capture_output=True, text=True)
-        return jsonify(status=result.stdout or result.stderr)
-    except Exception as Error:
-        logging.error(f"Test environment setup error: {Error}")
-        return jsonify(status=f"Error: {str(Error)}")
-
-
-
-def open_browser():
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
-    url = f'http://{local_ip}:5000/'
-    webbrowser.open_new(url)
+        webbrowser.open_new(url)
+    except Exception as e:
+        logging.warning(f"Could not open browser: {e}")
 
     
-def run_flask():
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True, use_reloader=False)
+def run_flask(port, no_browser):
+    if not no_browser:
+        threading.Timer(1.25, open_browser, args=[port]).start()
+    logging.info(f"Dashboard available at http://127.0.0.1:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True, use_reloader=False)
 
 if __name__ == "__main__":
-    threading.Timer(1.25, open_browser).start()
+    parser = argparse.ArgumentParser(description="Docker Monitor")
+    parser.add_argument('--port', type=int, default=5000, help='Port to run the web server on.')
+    parser.add_argument('--no-browser', action='store_true', help="Don't open a web browser automatically.")
+    args = parser.parse_args()
+
     threading.Thread(target=monitor, daemon=True).start()
-    run_flask()
+    run_flask(port=args.port, no_browser=args.no_browser)

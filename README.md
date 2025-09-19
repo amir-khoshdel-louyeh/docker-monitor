@@ -98,6 +98,3 @@ You can adjust the monitoring behavior in the script:
 ## Notes 📝
 - Requires Docker daemon access (if running without root, make sure your user is added to the `docker` group).  
 - Custom scripts used:  
-  - `docker-kill-remove.sh`  
-  - `setup_test_env.sh`  
-  *(Update paths to match your environment.)*  

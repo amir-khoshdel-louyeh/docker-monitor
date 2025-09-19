@@ -12,13 +12,12 @@
         <h2>Container Controls</h2>
 
         <div class="global-controls">
+            <button onclick="sendGlobalAction('stop')">Stop All</button>
             <button onclick="sendGlobalAction('pause')">Pause All</button>
             <button onclick="sendGlobalAction('unpause')">Unpause All</button>
             <button onclick="sendGlobalAction('restart')">Restart All</button>
             <button onclick="sendGlobalAction('remove')">Remove All</button>
 
-            <button onclick="killAndRemove()">Kill & Remove All</button>
-            <button onclick="testEnvironment()">Test Environment</button>
         </div>
 
         <h2>Container Status</h2>
@@ -37,6 +36,15 @@
 
         <h3>Logs</h3>
         <div id="logbox" style="width:80%; height:200px; margin:auto; border:1px solid #ccc; background:#f9f9f9; padding:10px; overflow-y:scroll; font-family: monospace; text-align: left;"></div>
+
+        <div class="terminal-container">
+            <h3>Run Docker Command</h3>
+            <div class="terminal-input-area">
+                <span class="prompt">&gt;</span>
+                <input type="text" id="command-input" placeholder="e.g., docker run -d --name my-new-container nginx">
+                <button onclick="runCommand()">Run</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -57,16 +65,23 @@
         }).then(r => r.json()).then(data => alert(data.status));
     }
 
-    function killAndRemove() {
-        fetch('/kill_remove', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => alert(data.status));
-    }
+    function runCommand() {
+        const input = document.getElementById('command-input');
+        const command = input.value;
+        if (!command) {
+            alert('Please enter a command.');
+            return;
+        }
 
-    function testEnvironment() {
-        fetch('/test_environment', { method: 'POST' })
-            .then(r => r.json())
-            .then(data => alert(data.status || 'Test completed'));
+        fetch('/run_command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: command })
+        }).then(r => r.json()).then(data => {
+            alert(`Status: ${data.status}\nOutput:\n${data.output}`);
+            input.value = ''; // Clear input after running
+            updateContainerStats(); // Refresh the table to show the new container
+        });
     }
 
     // ---------- Logs ----------
@@ -98,6 +113,7 @@
                     <td class="cpu">${data.cpu}</td>
                     <td class="ram">${data.ram}</td>
                     <td>
+                        <button onclick="sendAction('stop', '${data.name}')">Stop</button>
                         <button onclick="sendAction('pause', '${data.name}')">Pause</button>
                         <button onclick="sendAction('unpause', '${data.name}')">Unpause</button>
                         <button onclick="sendAction('restart', '${data.name}')">Restart</button>
@@ -129,6 +145,7 @@
                         <td class="cpu">${container.cpu}</td>
                         <td class="ram">${container.ram}</td>
                         <td>
+                        <button onclick="sendAction('stop', '${container.name}')">stop</button>
                             <button onclick="sendAction('pause', '${container.name}')">Pause</button>
                             <button onclick="sendAction('unpause', '${container.name}')">Unpause</button>
                             <button onclick="sendAction('restart', '${container.name}')">Restart</button>
@@ -150,5 +167,3 @@
 
 </body>
 </html>
-
-
