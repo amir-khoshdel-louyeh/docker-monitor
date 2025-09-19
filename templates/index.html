@@ -24,6 +24,7 @@
         <table border="1" cellspacing="0" cellpadding="10" style="margin: auto;">
             <thead>
                 <tr>
+                    <th>ID</th>
                     <th>Name</th>
                     <th>Status</th>
                     <th>CPU (%)</th>
@@ -35,26 +36,57 @@
         </table>
 
         <h3>Logs</h3>
-        <div id="logbox" style="width:80%; height:200px; margin:auto; border:1px solid #ccc; background:#f9f9f9; padding:10px; overflow-y:scroll; font-family: monospace; text-align: left;"></div>
+        <div id="logbox" class="log-box"></div>
 
-        <div class="terminal-container">
-            <h3>Run Docker Command</h3>
-            <div class="terminal-input-area">
-                <span class="prompt">&gt;</span>
-                <input type="text" id="command-input" placeholder="e.g., docker run -d --name my-new-container nginx">
-                <button onclick="runCommand()">Run</button>
+        <div class="terminal-wrapper">
+            <h3>Terminal</h3>
+            <div id="terminal" class="terminal" onclick="this.querySelector('input:not([disabled])').focus()">
+                <!-- Terminal content will be dynamically generated here -->
             </div>
         </div>
     </div>
 
     <script>
+    // ---------- Shell-like features for command input ----------
+    const commandInput = document.getElementById('command-input');
+    const terminal = document.getElementById('terminal');
+    const commandHistory = [];
+    let historyIndex = -1;
+
+    function attachInputListener(inputElement) {
+        inputElement.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault(); // Prevent form submission
+            runCommand(inputElement);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (historyIndex > 0) {
+                historyIndex--;
+            }
+            if (commandHistory[historyIndex]) {
+                inputElement.value = commandHistory[historyIndex];
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (historyIndex < commandHistory.length - 1) {
+                historyIndex++;
+                commandInput.value = commandHistory[historyIndex];
+            } else {
+                // Go to a blank line at the end of history
+                historyIndex = commandHistory.length;
+                inputElement.value = '';
+            }
+        }
+    });
+    }
+
     // ---------- Container Controls ----------
     function sendAction(action, name) {
         fetch('/control', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: action, name: name })
-        }).then(r => r.json()).then(data => alert(data.status));
+        }).then(r => r.json()).then(data => console.log(data.status)); // Log status instead of alert
     }
 
     function sendGlobalAction(action) {
@@ -62,14 +94,42 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: action })
-        }).then(r => r.json()).then(data => alert(data.status));
+        }).then(r => r.json()).then(data => console.log(data.status)); // Log status instead of alert
     }
 
-    function runCommand() {
-        const input = document.getElementById('command-input');
+    function createNewInputLine() {
+        const line = document.createElement('div');
+        line.className = 'terminal-input-line';
+        line.innerHTML = `
+            <span class="prompt">&gt;</span>
+            <input type="text" class="command-input" autofocus>
+        `;
+        terminal.appendChild(line);
+        const new_input = line.querySelector('input');
+        attachInputListener(new_input);
+        new_input.focus();
+        terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function runCommand(input) {
         const command = input.value;
         if (!command) {
-            alert('Please enter a command.');
+            return;
+        }
+
+        // Add to history and reset index
+        commandHistory.push(command);
+        historyIndex = commandHistory.length;
+        
+        // Make current input line static
+        const parentLine = input.parentNode;
+        parentLine.removeChild(input);
+        parentLine.innerHTML += `<span class="command-text">${command}</span>`;
+
+        // Handle 'clear' command locally in the browser
+        if (command.toLowerCase() === 'clear') {
+            terminal.innerHTML = '';
+            createNewInputLine();
             return;
         }
 
@@ -77,10 +137,26 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ command: command })
-        }).then(r => r.json()).then(data => {
-            alert(`Status: ${data.status}\nOutput:\n${data.output}`);
-            input.value = ''; // Clear input after running
-            updateContainerStats(); // Refresh the table to show the new container
+        }).then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+
+            function read() {
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        updateContainerStats(); // Refresh table after command finishes
+                        createNewInputLine(); // Add a new input line for the next command
+                        return;
+                    }
+                    const outputLine = document.createElement('div');
+                    outputLine.className = 'output-line';
+                    outputLine.innerHTML = decoder.decode(value, { stream: true }).replace(/\n/g, '<br>');
+                    terminal.appendChild(outputLine);
+                    terminal.scrollTop = terminal.scrollHeight; // Auto-scroll
+                    read(); // Continue reading
+                });
+            }
+            read();
         });
     }
 
@@ -103,11 +179,13 @@
         eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
             let row = document.getElementById("row-" + data.name);
+            let id_cell_class = "id-" + data.id;
 
             if (!row) {
                 row = document.createElement("tr");
                 row.id = "row-" + data.name;
                 row.innerHTML = `
+                    <td class="${id_cell_class}">${data.id}</td>
                     <td class="name">${data.name}</td>
                     <td class="status">${data.status}</td>
                     <td class="cpu">${data.cpu}</td>
@@ -122,6 +200,7 @@
                 `;
                 tbody.appendChild(row);
             } else {
+                row.querySelector("." + id_cell_class).textContent = data.id;
                 row.querySelector(".status").textContent = data.status;
                 row.querySelector(".cpu").textContent = data.cpu;
                 row.querySelector(".ram").textContent = data.ram;
@@ -140,6 +219,7 @@
                     const row = document.createElement('tr');
                     row.id = "row-" + container.name;
                     row.innerHTML = `
+                        <td class="id-${container.id}">${container.id}</td>
                         <td class="name">${container.name}</td>
                         <td class="status">${container.status}</td>
                         <td class="cpu">${container.cpu}</td>
@@ -158,6 +238,7 @@
     }
 
     // ---------- Init ----------
+    createNewInputLine();                    // Create the initial terminal prompt
     fetchLogs();
     setInterval(fetchLogs, 10000);           // refresh logs every 10s
     initStream();                            // live updates via SSE

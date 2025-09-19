@@ -171,7 +171,7 @@ def monitor():
                 CPU_percent = CPU_usage(container)
                 RAM_percent = RAM_usage(container)
 
-                record = {'name': container.name,'status': container.status,'cpu': f"{CPU_percent:.2f}",'ram': f"{RAM_percent:.2f}"}
+                record = {'id': container.short_id, 'name': container.name,'status': container.status,'cpu': f"{CPU_percent:.2f}",'ram': f"{RAM_percent:.2f}"}
                 event_queue.put(record)
 
                 
@@ -224,6 +224,7 @@ def home():
         except Exception:
             cpu, ram = 0.0, 0.0
         container_stats.append({
+            'id': container.short_id,
             'name': container.name,
             'status': container.status,
             'cpu': f"{cpu:.2f}",
@@ -245,7 +246,7 @@ def container_stats():
         except:
             cpu = 0.0
             ram = 0.0
-        stats.append({'name': c.name,'status': c.status,'cpu': f"{cpu:.2f}",'ram': f"{ram:.2f}"})
+        stats.append({'id': c.short_id, 'name': c.name,'status': c.status,'cpu': f"{cpu:.2f}",'ram': f"{ram:.2f}"})
     return jsonify(stats)
 
 
@@ -315,21 +316,31 @@ def run_command():
     """
     command_str = request.json.get('command')
     if not command_str:
-        return jsonify({'status': 'error', 'message': 'No command provided', 'output': ''}), 400
+        return jsonify({'status': 'error', 'message': 'No command provided'}), 400
 
     # Basic security check to only allow 'docker run'
-    if not command_str.strip().startswith('docker run'):
-        msg = "Security error: Only 'docker run' commands are allowed."
+    if not command_str.strip().startswith('docker '):
+        msg = "Security error: Only 'docker' commands are allowed."
         logging.warning(msg)
-        return jsonify({'status': 'error', 'message': msg, 'output': ''}), 403
+        return jsonify({'status': 'error', 'message': msg}), 403
 
-    try:
-        logging.info(f"Executing user command: {command_str}")
-        result = subprocess.run(command_str, shell=True, check=True, capture_output=True, text=True)
-        return jsonify({'status': 'success', 'message': 'Command executed', 'output': result.stdout or result.stderr})
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed: {e.stderr}")
-        return jsonify({'status': 'error', 'message': 'Command failed', 'output': e.stderr}), 500
+    def command_stream():
+        """Runs the command and yields its output line by line."""
+        try:
+            logging.info(f"Executing user command: {command_str}")
+            # Use Popen to stream output in real-time
+            process = subprocess.Popen(command_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+            for line in iter(process.stdout.readline, ''):
+                yield line
+            
+            process.stdout.close()
+            process.wait()
+        except Exception as e:
+            logging.error(f"Command failed: {e}")
+            yield f"Error executing command: {e}\n"
+
+    return Response(stream_with_context(command_stream()), mimetype='text/plain')
 
 
 @app.route('/stream')

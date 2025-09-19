@@ -95,39 +95,49 @@ td button:nth-child(5) { background-color: #d10000; }  /* Remove */
     margin-top: 1rem;
 }
 
-.terminal-container {
+.terminal-wrapper {
     margin-top: 2rem;
 }
 
-.terminal-input-area {
-    display: flex;
-    align-items: center;
+.terminal {
     background-color: #1e1e1e;
+    color: #f1f1f1;
+    font-family: monospace;
+    height: 350px;
+    overflow-y: auto;
     padding: 10px;
     border-radius: 5px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    cursor: text;
 }
 
-.terminal-input-area .prompt {
+.terminal .prompt {
     color: #00ff99;
-    font-family: monospace;
     margin-right: 10px;
 }
 
-.terminal-input-area input {
+.terminal .terminal-input-line {
+    display: flex;
+    align-items: center;
+}
+
+.terminal .command-input {
     flex-grow: 1;
-    background: none;
+    background: transparent;
     border: none;
     color: #f1f1f1;
     font-family: monospace;
     font-size: 1rem;
 }
 
-.terminal-input-area input:focus {
+.terminal .command-input:focus {
     outline: none;
 }
 
-.terminal-input-area button {
-    background-color: #2980b9;
+.terminal .command-text {
+    white-space: pre-wrap;
 }
+
+.terminal .output-line {
+    white-space: pre-wrap;
+    word-break: break-all;
 }
