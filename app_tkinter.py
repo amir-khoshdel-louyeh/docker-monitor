@@ -10,7 +10,7 @@ import tkinter as tk # Keep this for the main app
 from tkinter import ttk, scrolledtext
 
 log_buffer = deque(maxlen=1000)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 class BufferHandler(logging.Handler):
     def emit(self, record):
@@ -18,14 +18,15 @@ class BufferHandler(logging.Handler):
         log_buffer.append(log_entry)
 
 buffer_handler = BufferHandler()
-buffer_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+buffer_handler.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
 logging.getLogger().addHandler(buffer_handler)
 
+
 # --- Configuration ---
-CPU_LIMIT = 70.0
-RAM_LIMIT = 70.0
+CPU_LIMIT = 50.0
+RAM_LIMIT = 5.0
 CLONE_NUM = 2
-SLEEP_TIME = 2  # Polling interval in seconds
+SLEEP_TIME = 4 # Polling interval in seconds
 
 
 # --- Docker Client and Logic (adapted from app.py) ---
@@ -38,14 +39,30 @@ except Exception as e:
     exit(1)
 
 stats_queue = queue.Queue()
+manual_refresh_queue = queue.Queue() # A dedicated queue for manual refresh results
+docker_lock = threading.Lock() # A lock to prevent race conditions on Docker operations
+
+
 
 def calculate_cpu_percent(stats):
     try:
-        cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
-        system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
-        num_cpus = stats['cpu_stats'].get('online_cpus', len(stats['cpu_stats']['cpu_usage']['percpu_usage'] or [1]))
+        cpu_current = stats['cpu_stats']['cpu_usage']['total_usage']
+        cpu_prev = stats['precpu_stats']['cpu_usage']['total_usage']
+       
+        system_current = stats['cpu_stats']['system_cpu_usage']
+        system_prev = stats['precpu_stats']['system_cpu_usage']
+
+        cpu_delta = cpu_current - cpu_prev
+        system_delta = system_current - system_prev
+
+        num_cpus = stats['cpu_stats'].get('online_cpus', 1)
+        
         if system_delta > 0 and cpu_delta > 0:
-            return (cpu_delta / system_delta) * num_cpus * 100.0
+            CPU_percent = (cpu_delta / system_delta) * num_cpus * 100.0
+        else:
+            CPU_percent = 0.0
+
+        return CPU_percent
     except (KeyError, TypeError):
         pass
     return 0.0
@@ -62,6 +79,7 @@ def calculate_ram_percent(stats):
 def get_container_stats(container):
     try:
         stats = container.stats(stream=False)
+
         cpu = calculate_cpu_percent(stats)
         ram = calculate_ram_percent(stats)
         return {
@@ -88,16 +106,13 @@ def delete_clones(container, all_containers):
 
 # --- Docker Cleanup Function ---
 def docker_cleanup():
-    """Prunes unused Docker containers, images, and volumes using the SDK."""
-    logging.info("Starting Docker cleanup...")
+    #logging.info("Starting Docker cleanup...")
     try:
         # Use the Docker SDK for a cleaner and more robust implementation
-        client.containers.prune()
-        logging.info("Pruned unused containers.")
-        client.images.prune(filters={'dangling': False})  # Equivalent to 'docker image prune -a'
-        logging.info("Pruned unused images.")
+        client.images.prune(filters={'dangling': True})  # Prune dangling images created by .commit()
+        #logging.info("Pruned dangling images.")
         client.volumes.prune()
-        logging.info("Pruned unused volumes. Docker cleanup finished.")
+        #logging.info("Pruned unused volumes. Docker cleanup finished.")
     except Exception as e:
         logging.error(f"An error occurred during Docker cleanup: {e}")
 
@@ -132,30 +147,31 @@ def scale_container(container, all_containers):
 
 
 def monitor_thread():
-    """Background thread to monitor containers and trigger scaling."""
+
     while True:
-        try:
-            all_containers = client.containers.list(all=True)
-            stats_list = []
-            for container in all_containers:
-                stats = get_container_stats(container)
-                stats_list.append(stats)
+        with docker_lock:
+            try:
+                all_containers = client.containers.list(all=True)
+                stats_list = []
+                for container in all_containers:
+                    stats = get_container_stats(container)
+                    stats_list.append(stats)
 
-                if container.status == 'running':
-                    cpu_float = float(stats['cpu'])
-                    ram_float = float(stats['ram'])
+                    # --- Auto-scaling logic ---
+                    # Only consider 'running' containers for scaling to avoid race conditions with paused ones.
+                    if container.status == 'running':
+                        cpu_float = float(stats['cpu'])
+                        ram_float = float(stats['ram'])
 
-                    if cpu_float > CPU_LIMIT or ram_float > RAM_LIMIT:
-                        if "_clone" in container.name:
-                            continue
-                        logging.info(f"Container {container.name} overloaded (CPU: {cpu_float:.2f}%, RAM: {ram_float:.2f}%). Scaling...")
-                        scale_container(container, all_containers)
-                        
-            # Put the entire list into the queue for the GUI to process
-            stats_queue.put(stats_list)
+                        if (cpu_float > CPU_LIMIT or ram_float > RAM_LIMIT) and "_clone" not in container.name:
+                            logging.info(f"Container {container.name} overloaded (CPU: {cpu_float:.2f}%, RAM: {ram_float:.2f}%). Scaling...")
+                            scale_container(container, all_containers)
+                            
+                # Put the entire list into the queue for the GUI to process
+                stats_queue.put(stats_list)
 
-        except Exception as e:
-            logging.error(f"Error in monitor loop: {e}")
+            except Exception as e:
+                logging.error(f"Error in monitor loop: {e}")
         
         time.sleep(SLEEP_TIME)
 
@@ -253,6 +269,7 @@ class DockerTerminal(tk.Frame):
             self.add_new_prompt()
             return "break"
 
+        
         # Security: Only allow 'docker' commands
         command_parts = command_str.split()
         if not command_parts or command_parts[0] != "docker":
@@ -314,7 +331,13 @@ class DockerMonitorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Docker Monitor")
-        self.geometry("1200x800")
+        
+        # Get screen width and height
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        # Set geometry to cover the entire screen
+        self.geometry(f"{screen_width}x{screen_height}+0+0")
+
         self.configure(bg='#1e2a35')
 
         self.log_update_idx = 0
@@ -331,7 +354,7 @@ class DockerMonitorApp(tk.Tk):
         main_pane.add(bottom_frame)
 
         # این خط باعث میشه پیش‌فرض بالا حدود 500 پیکسل باشه
-        self.after(100, lambda: main_pane.sashpos(0, 330))
+        self.after(100, lambda: main_pane.sashpos(0, 360))
 
 
         # --- Top Pane: Controls and Container List ---
@@ -460,6 +483,10 @@ class DockerMonitorApp(tk.Tk):
             )
             btn.pack(fill=tk.X, pady=2)
 
+        # Add a refresh button
+        refresh_btn = tk.Button(global_btn_frame, text="Refresh List", bg="#00ADB5", fg='white', command=self.force_refresh_containers)
+        refresh_btn.pack(fill=tk.X, pady=(15, 2))
+
     def create_container_widgets(self, parent):
         cols = ('ID', 'Name', 'Status', 'CPU (%)', 'RAM (%)')
         self.tree = ttk.Treeview(parent, columns=cols, show='headings', selectmode='browse')
@@ -511,82 +538,110 @@ class DockerMonitorApp(tk.Tk):
         container_name = item['values'][1]
         logging.info(f"User requested '{action}' on container '{container_name}'.")
 
-        try:
-            container = client.containers.get(container_name)
-            if action == 'remove':
-                # First stop, then forcefully remove to avoid conflicts.
-                #container.stop()
-                container.remove(force=True)
-            elif hasattr(container, action):
-                getattr(container, action)()
-        except Exception as e:
-            logging.error(f"Error during '{action}' on container '{container_name}': {e}")
+        with docker_lock:
+            try:
+                container = client.containers.get(container_name)
+                if action == 'remove':
+                    # First stop, then forcefully remove to avoid conflicts.
+                    container.stop()
+                    container.remove(force=True)
+                elif hasattr(container, action):
+                    getattr(container, action)()
+            except Exception as e:
+                logging.error(f"Error during '{action}' on container '{container_name}': {e}")
 
     def run_global_action(self, action):
         logging.info(f"User requested '{action}' on ALL containers.")
-        try:
-            containers = client.containers.list(all=True)
-            for container in containers:
-                if action == 'pause' and container.status == 'running': 
-                    container.pause()
-                elif action == 'unpause' and container.status == 'paused': 
-                    container.unpause()
-                elif action == 'stop' and container.status == 'running': 
-                    container.stop()
-                elif action == 'restart': 
-                    container.restart()
-                elif action == 'remove':
-                    # Forcefully remove each container after stopping.
-                    container.remove(force=True)
-        except Exception as e:
-            logging.error(f"Error during global '{action}': {e}")
-        finally:
-            if action in ['stop', 'remove']:
-                threading.Thread(target=docker_cleanup, daemon=True).start()
+        with docker_lock:
+            try:
+                containers = client.containers.list(all=True)
+                for container in containers:
+                    if action == 'pause' and container.status == 'running': 
+                        container.pause()
+                    elif action == 'unpause' and container.status == 'paused': 
+                        container.unpause()
+                    elif action == 'stop' and container.status == 'running': 
+                        container.stop()
+                    elif action == 'restart': 
+                        container.restart()
+                    elif action == 'remove':
+                        # Forcefully remove each container after stopping.
+                        container.stop()
+                        container.remove(force=True)
+            except Exception as e:
+                logging.error(f"Error during global '{action}': {e}")
+            finally:
+                if action in ['stop', 'remove']:
+                    threading.Thread(target=docker_cleanup, daemon=True).start()
 
+    def force_refresh_containers(self):
+        """Immediately fetches all container stats and updates the GUI tree."""
+        logging.info("User requested manual container list refresh.")
+        # Run the blocking Docker API calls in a separate thread
+        threading.Thread(target=self._fetch_all_stats_for_refresh, daemon=True).start()
+
+    def _fetch_all_stats_for_refresh(self):
+        """
+        Worker function for the manual refresh thread.
+        Fetches stats and puts them in the manual_refresh_queue.
+        """
+        with docker_lock:
+            try:
+                all_containers = client.containers.list(all=True)
+                stats_list = [get_container_stats(c) for c in all_containers]
+                manual_refresh_queue.put(stats_list)
+            except Exception as e:
+                logging.error(f"Error in manual refresh thread: {e}")
+
+    def _update_tree_from_stats(self, stats_list):
+        """Helper function to update the Treeview from a list of stats."""
+        if not self.tree_tags_configured:
+            self.tree.tag_configure('oddrow', background=self.FRAME_BG)
+            self.tree.tag_configure('evenrow', background=self.BG_COLOR)
+            self.tree_tags_configured = True
+
+        current_ids = {item['id'] for item in stats_list}
+        tree_items = self.tree.get_children()
+
+        for child in tree_items:
+            if self.tree.item(child)['values'][0] not in current_ids:
+                self.tree.delete(child)
+
+        for item in stats_list:
+            values = (item['id'], item['name'], item['status'], item['cpu'], item['ram'])
+            if self.tree.exists(item['name']):
+                self.tree.item(item['name'], values=values)
+            else:
+                self.tree.insert('', tk.END, iid=item['name'], values=values)
+        self._reapply_row_tags()
 
     def update_container_list(self):
         """Checks the queue for new stats and updates the Treeview."""
         try:
+            # First, check for manual refresh data, which has priority
+            while not manual_refresh_queue.empty():
+                stats_list = manual_refresh_queue.get_nowait()
+                self._update_tree_from_stats(stats_list)
+                # Clear the regular queue to avoid showing stale data right after a refresh
+                while not stats_queue.empty():
+                    stats_queue.get_nowait()
+
             while not stats_queue.empty():
                 stats_list = stats_queue.get_nowait()
 
-                if not self.tree_tags_configured:
-                    self.tree.tag_configure('oddrow', background=self.FRAME_BG)
-                    self.tree.tag_configure('evenrow', background=self.BG_COLOR)
-                    self.tree_tags_configured = True
-                
-                # Keep track of which containers are still present
-                current_ids = {item['id'] for item in stats_list}
-                tree_items = self.tree.get_children()
-                tree_ids = {self.tree.item(child)['values'][0] for child in tree_items}
-
-                # Remove containers that are no longer present
-                for child in tree_items:
-                    if self.tree.item(child)['values'][0] not in current_ids:
-                        self.tree.delete(child)
-                tree_items = self.tree.get_children() # Re-fetch after deletion
-
-                # Add or update containers
-                for item in stats_list:
-                    values = (item['id'], item['name'], item['status'], item['cpu'], item['ram'])
-                    # Use container name as the item ID in the tree for easy updates
-                    if self.tree.exists(item['name']):
-                        self.tree.item(item['name'], values=values)
-                    else:
-                        # Insert new item and apply alternating row color
-                        tag = 'evenrow' if len(tree_items) % 2 == 0 else 'oddrow'
-                        self.tree.insert('', tk.END, iid=item['name'], values=values, tags=(tag,))
-                
-                # Re-apply tags to all rows to handle deletions correctly
-                for i, iid in enumerate(self.tree.get_children()):
-                    self.tree.item(iid, tags=('evenrow' if i % 2 == 0 else 'oddrow',))
+                # Use the helper to update the tree from the queued stats
+                self._update_tree_from_stats(stats_list)
 
         except queue.Empty:
             pass
         finally:
-            # Schedule the next update
+            # Schedule the next check
             self.after(1000, self.update_container_list)
+
+    def _reapply_row_tags(self):
+        """Re-applies alternating row colors to the entire tree."""
+        for i, iid in enumerate(self.tree.get_children()):
+            self.tree.item(iid, tags=('evenrow' if i % 2 == 0 else 'oddrow',))
 
     def update_logs(self):
         """Periodically checks the log buffer and appends new entries."""
