@@ -35,46 +35,43 @@ RAM_LIMIT = 70.0
 CLONE_NUM = 2
 SLEEP_TIME = 1
 
-def CPU_usage(container):
+def calculate_cpu_percent(stats):
     try:
-        stats = container.stats(stream=False)
-
-        cpu_current = stats['cpu_stats']['cpu_usage']['total_usage']
-        cpu_prev = stats['precpu_stats']['cpu_usage']['total_usage']
-       
-        system_current = stats['cpu_stats']['system_cpu_usage']
-        system_prev = stats['precpu_stats']['system_cpu_usage']
-
-        cpu_delta = cpu_current - cpu_prev
-        system_delta = system_current - system_prev
-
-        num_cpus = stats['cpu_stats'].get('online_cpus', 1)
-
+        cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
+        system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
+        num_cpus = stats['cpu_stats'].get('online_cpus', len(stats['cpu_stats']['cpu_usage']['percpu_usage'] or [1]))
         if system_delta > 0 and cpu_delta > 0:
-            CPU_percent = (cpu_delta / system_delta) * num_cpus * 100.0
-        else:
-            CPU_percent = 0.0
+            return (cpu_delta / system_delta) * num_cpus * 100.0
+    except (KeyError, TypeError):
+        pass
+    return 0.0
 
-        return CPU_percent
-
-    except Exception as Error:
-        logging.error(f"Error calculating CPU usage: {Error}")
-        return 0.0
-
-def RAM_usage(container):
+def calculate_ram_percent(stats):
     try:
-        stats = container.stats(stream=False)
-
         mem_usage = stats['memory_stats'].get('usage', 0)
         mem_limit = stats['memory_stats'].get('limit', 1)
+        return (mem_usage / mem_limit) * 100.0
+    except (KeyError, TypeError):
+        pass
+    return 0.0
 
-        RAM_percent = (mem_usage / mem_limit) * 100.0
-        return RAM_percent
-
-    except Exception as Error:
-        logging.error(f"Error calculating memory usage: {Error}")
-        return 0.0
-
+def get_container_stats(container):
+    """Helper function to get all stats for a container in one go."""
+    try:
+        # Fetch stats once, then calculate from the single object.
+        stats = container.stats(stream=False)
+        cpu = calculate_cpu_percent(stats)
+        ram = calculate_ram_percent(stats)
+        return {
+            'id': container.short_id,
+            'name': container.name,
+            'status': container.status,
+            'cpu': f"{cpu:.2f}",
+            'ram': f"{ram:.2f}"
+        }
+    except Exception:
+        # Return zeroed stats on any failure
+        return {'id': container.short_id, 'name': container.name, 'status': 'error', 'cpu': '0.00', 'ram': '0.00'}
 
 def pause_container(container):
     name = container.name 
@@ -160,26 +157,19 @@ def monitor():
 
             logging.info(f"Checking container: {container_name}... START")
 
-            if False: #container_status != 'running' and container_status != 'paused'
-                logging.info(f"Restarting inactive container: {container_name}... START")
-                try:
-                    container.restart()
-                    logging.info(f"Container {container_name} restarted successfully.")
-                except Exception as Error:
-                    logging.error(f"Failed to restart container {container_name}: {Error}")
-            else:
-                CPU_percent = CPU_usage(container)
-                RAM_percent = RAM_usage(container)
+            # Get all stats once to be efficient
+            stats = get_container_stats(container)
+            event_queue.put(stats)
 
-                record = {'id': container.short_id, 'name': container.name,'status': container.status,'cpu': f"{CPU_percent:.2f}",'ram': f"{RAM_percent:.2f}"}
-                event_queue.put(record)
+            if container_status == 'running':
+                cpu_float = float(stats['cpu'])
+                ram_float = float(stats['ram'])
 
-                
-                if CPU_percent > CPU_LIMIT or RAM_percent > RAM_LIMIT:
+                if cpu_float > CPU_LIMIT or ram_float > RAM_LIMIT:
                     if "_clone" in container_name:
                         logging.info(f"Skipping clone container: {container_name}")
                         continue
-                    logging.info(f"Container {container_name} overloaded (CPU: {CPU_percent:.2f}%, Memory: {RAM_percent:.2f}%). Attempting to scale...")
+                    logging.info(f"Container {container_name} overloaded (CPU: {cpu_float:.2f}%, Memory: {ram_float:.2f}%). Attempting to scale...")
                     scale_container(container)
 
         time.sleep(SLEEP_TIME)
@@ -216,20 +206,7 @@ def get_logs():
 @app.route('/')
 def home():
     containers = client.containers.list(all=True)
-    container_stats = []
-    for container in containers:
-        try:
-            cpu = CPU_usage(container)
-            ram = RAM_usage(container)
-        except Exception:
-            cpu, ram = 0.0, 0.0
-        container_stats.append({
-            'id': container.short_id,
-            'name': container.name,
-            'status': container.status,
-            'cpu': f"{cpu:.2f}",
-            'ram': f"{ram:.2f}"
-        })
+    container_stats = [get_container_stats(c) for c in containers]
     return render_template('index.html', containers=container_stats)
 
 
@@ -238,16 +215,7 @@ def home():
 @app.route('/container_stats')
 def container_stats():
     containers = client.containers.list(all=True)
-    stats = []
-    for c in containers:
-        try:
-            cpu = CPU_usage(c)
-            ram = RAM_usage(c)
-        except:
-            cpu = 0.0
-            ram = 0.0
-        stats.append({'id': c.short_id, 'name': c.name,'status': c.status,'cpu': f"{cpu:.2f}",'ram': f"{ram:.2f}"})
-    return jsonify(stats)
+    return jsonify([get_container_stats(c) for c in containers])
 
 
 
@@ -318,8 +286,10 @@ def run_command():
     if not command_str:
         return jsonify({'status': 'error', 'message': 'No command provided'}), 400
 
-    # Basic security check to only allow 'docker run'
-    if not command_str.strip().startswith('docker '):
+    # Security check: Split the command and ensure it starts with 'docker'.
+    # This is more robust than a simple startswith check.
+    command_parts = command_str.strip().split()
+    if not command_parts or command_parts[0] != 'docker':
         msg = "Security error: Only 'docker' commands are allowed."
         logging.warning(msg)
         return jsonify({'status': 'error', 'message': msg}), 403
@@ -329,7 +299,7 @@ def run_command():
         try:
             logging.info(f"Executing user command: {command_str}")
             # Use Popen to stream output in real-time
-            process = subprocess.Popen(command_str, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            process = subprocess.Popen(command_parts, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
             for line in iter(process.stdout.readline, ''):
                 yield line
