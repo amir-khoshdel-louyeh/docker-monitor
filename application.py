@@ -23,10 +23,10 @@ logging.getLogger().addHandler(buffer_handler)
 
 
 # --- Configuration ---
-CPU_LIMIT = 50.0
-RAM_LIMIT = 5.0
-CLONE_NUM = 2
-SLEEP_TIME = 4 # Polling interval in seconds
+CPU_LIMIT = 50.0  # %
+RAM_LIMIT = 5.0   # %
+CLONE_NUM = 2     # Max clones per container
+SLEEP_TIME = 4    # Polling interval in seconds
 
 
 # --- Docker Client and Logic (adapted from app.py) ---
@@ -147,10 +147,12 @@ def scale_container(container, all_containers):
 
 
 def monitor_thread():
+    global SLEEP_TIME
 
     while True:
         with docker_lock:
             try:
+
                 all_containers = client.containers.list(all=True)
                 stats_list = []
                 for container in all_containers:
@@ -345,33 +347,34 @@ class DockerMonitorApp(tk.Tk):
         self.setup_styles()
 
         # --- Main Layout ---
-        main_pane = ttk.PanedWindow(self, orient=tk.VERTICAL)
+        # The main split is now horizontal: Controls on the left, everything else on the right.
+        main_pane = ttk.PanedWindow(self, orient=tk.HORIZONTAL)
         main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        top_frame = ttk.Frame(main_pane)
-        bottom_frame = ttk.Frame(main_pane)
-        main_pane.add(top_frame)
-        main_pane.add(bottom_frame)
+        # --- Left Pane: Controls ---
+        controls_frame = ttk.Labelframe(main_pane, text="Controls", width=170)
+        main_pane.add(controls_frame, weight=0)
 
-        # این خط باعث میشه پیش‌فرض بالا حدود 500 پیکسل باشه
-        self.after(100, lambda: main_pane.sashpos(0, 360))
+        # --- Right Pane (Vertical Split) ---
+        right_pane = ttk.PanedWindow(main_pane, orient=tk.VERTICAL)
+        main_pane.add(right_pane, weight=1)
 
+        # Set the initial sash positions for a balanced layout
+        self.after(100, lambda: main_pane.sashpos(0, 140))
+        self.after(100, lambda: right_pane.sashpos(0, 360))
 
-        # --- Top Pane: Controls and Container List ---
-        top_pane = ttk.PanedWindow(top_frame, orient=tk.HORIZONTAL)
-        top_pane.pack(fill=tk.BOTH, expand=True)
+        # --- Top-Right: Containers ---
+        containers_frame = ttk.Labelframe(right_pane, text="Containers", style='Containers.TLabelframe')
+        right_pane.add(containers_frame, weight=1)
 
-        controls_frame = ttk.Labelframe(top_pane, text="Controls", width=300)
-        containers_frame = ttk.Labelframe(top_pane, text="Containers", style='Containers.TLabelframe')
-        top_pane.add(controls_frame, weight=0)
-        top_pane.add(containers_frame, weight=1)
+        # --- Bottom-Right: Logs and Terminal ---
+        bottom_right_frame = ttk.Frame(right_pane)
+        right_pane.add(bottom_right_frame, weight=1)
 
-        # --- Bottom Pane: Logs and Terminal ---
-        bottom_pane = ttk.PanedWindow(bottom_frame, orient=tk.HORIZONTAL)
+        bottom_pane = ttk.PanedWindow(bottom_right_frame, orient=tk.HORIZONTAL)
         bottom_pane.pack(fill=tk.BOTH, expand=True)
-
-        logs_frame = ttk.Labelframe(bottom_pane, text="Application Logs")
-        terminal_frame = ttk.Labelframe(bottom_pane, text="Docker Terminal")
+        logs_frame = ttk.Labelframe(bottom_pane, text="Application Logs", width=400)
+        terminal_frame = ttk.Labelframe(bottom_pane, text="Docker Terminal", width=400)
         bottom_pane.add(logs_frame, weight=1)
         bottom_pane.add(terminal_frame, weight=1)
 
@@ -426,32 +429,26 @@ class DockerMonitorApp(tk.Tk):
         self.tree_tags_configured = False # To set up alternating row colors only once
 
     def create_control_widgets(self, parent):
-        # Create two frames to sit side-by-side for controls
-        individual_frame = ttk.Frame(parent, style='TFrame')
-        individual_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5, expand=True)
-
-        global_frame = ttk.Frame(parent)
-        global_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5, expand=True)
-
-        # --- Individual Controls (Left side) ---
-        ttk.Label(individual_frame, text="Selected Container:", font=('Segoe UI', 9)).pack(pady=(10, 0))
-        self.selected_container_label = ttk.Label(individual_frame, text="None", font=('Segoe UI', 10, 'bold'), foreground=self.ACCENT_COLOR)
+        # --- Selected Container Section ---
+        ttk.Label(parent, text="Selected Container", font=('Segoe UI', 9)).pack(pady=(10, 0), padx=10, anchor='w')
+        self.selected_container_label = ttk.Label(parent, text="None", font=('Segoe UI', 10, 'bold'), foreground=self.ACCENT_COLOR)
         self.selected_container_label.pack(pady=5)
 
-        btn_frame = ttk.Frame(individual_frame)
-        btn_frame.pack(pady=5, padx=10, fill=tk.X)
-        
+        # --- Individual Actions Section ---
+        individual_actions_frame = ttk.Frame(parent)
+        individual_actions_frame.pack(pady=5, padx=10, fill=tk.X)
+
         actions = [
             ('Stop', '#d85000'),      # Darker Orange
             ('Pause', '#d4c100'),     # Darker Yellow
             ('Unpause', '#219653'),    # Darker Green
             ('Restart', '#2471a3'),    # Darker Blue
-            ('Remove', '#b80000')     # Darker Red
+            ('Remove', '#b80000'),     # Darker Red
         ]
 
         for action, color in actions:
             btn = tk.Button(
-                btn_frame,
+                individual_actions_frame,
                 text=action,
                 bg=color,
                 fg='black' if color in ['#d4c100'] else 'white',
@@ -459,12 +456,19 @@ class DockerMonitorApp(tk.Tk):
             )
             btn.pack(fill=tk.X, pady=2)
 
-        # --- Global Controls (Right side) ---
-        ttk.Label(global_frame, text="Global Actions:\n", font=('Segoe UI', 9)).pack(pady=(10,0))
+        # --- Separator ---
+        ttk.Separator(parent, orient='horizontal').pack(fill='x', pady=15, padx=10)
 
-        global_btn_frame = ttk.Frame(global_frame)
-        global_btn_frame.pack(pady=20, padx=10, fill=tk.X)
-        
+        # --- Global Actions Section ---
+        ttk.Label(parent, text="Global Actions", font=('Segoe UI', 9)).pack(pady=(0, 5), padx=10, anchor='w')
+
+        global_actions_frame = ttk.Frame(parent)
+        global_actions_frame.pack(pady=0, padx=10, fill=tk.X)
+
+        # --- Separator ---
+        ttk.Separator(parent, orient='horizontal').pack(fill='x', pady=15, padx=10)
+
+
         global_actions = [
             ('Stop All', '#d85000'),
             ('Pause All', '#d4c100'),
@@ -475,7 +479,7 @@ class DockerMonitorApp(tk.Tk):
 
         for action, color in global_actions:
             btn = tk.Button(
-                global_btn_frame,
+                global_actions_frame,
                 text=action,
                 bg=color,
                 fg='black' if color in ['#d4c100'] else 'white',
@@ -483,11 +487,22 @@ class DockerMonitorApp(tk.Tk):
             )
             btn.pack(fill=tk.X, pady=2)
 
-        # Add a refresh button
-        refresh_btn = tk.Button(global_btn_frame, text="Refresh List", bg="#00ADB5", fg='white', command=self.force_refresh_containers)
-        refresh_btn.pack(fill=tk.X, pady=(15, 2))
+        # --- Application Control Section ---
+        app_control_frame = ttk.Frame(parent)
+        app_control_frame.pack(pady=0, padx=10, fill=tk.X)
+
+        refresh_btn = tk.Button(app_control_frame, text="Refresh List", bg="#00ADB5", fg='white', command=self.force_refresh_containers)
+        refresh_btn.pack(fill=tk.X, pady=2)
+
+        config_btn = tk.Button(app_control_frame, text="Config", bg="#6c757d", fg='white', command=self.open_config_window)
+        config_btn.pack(fill=tk.X, pady=2)
+
 
     def create_container_widgets(self, parent):
+
+        # --- Container Treeview ---
+        tree_frame = ttk.Frame(parent) # A frame to hold the tree and scrollbar
+        tree_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         cols = ('ID', 'Name', 'Status', 'CPU (%)', 'RAM (%)')
         self.tree = ttk.Treeview(parent, columns=cols, show='headings', selectmode='browse')
         for col in cols:
@@ -495,11 +510,11 @@ class DockerMonitorApp(tk.Tk):
             self.tree.column(col, width=100, anchor=tk.CENTER)
         self.tree.column('Name', width=200)
 
-        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=self.tree.yview)
+        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscroll=scrollbar.set)
         
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, in_=tree_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, in_=tree_frame)
 
         self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
 
@@ -592,6 +607,75 @@ class DockerMonitorApp(tk.Tk):
                 manual_refresh_queue.put(stats_list)
             except Exception as e:
                 logging.error(f"Error in manual refresh thread: {e}")
+
+    def open_config_window(self):
+        """Opens a Toplevel window to configure monitoring settings."""
+        config_window = tk.Toplevel(self)
+        config_window.title("Configuration")
+        config_window.configure(bg=self.BG_COLOR)
+        config_window.transient(self)  # Keep it on top of the main window
+        config_window.grab_set()       # Modal behavior
+
+        # Center the window
+        main_x = self.winfo_x()
+        main_y = self.winfo_y()
+        main_w = self.winfo_width()
+        main_h = self.winfo_height()
+        win_w = 300
+        win_h = 250
+        pos_x = main_x + (main_w // 2) - (win_w // 2)
+        pos_y = main_y + (main_h // 2) - (win_h // 2)
+        config_window.geometry(f'{win_w}x{win_h}+{pos_x}+{pos_y}')
+
+        frame = tk.Frame(config_window, bg=self.BG_COLOR, padx=10, pady=10)
+        frame.pack(expand=True, fill=tk.BOTH)
+
+        # --- Labels and Entries ---
+        ttk.Label(frame, text="CPU Limit (%)").grid(row=0, column=0, sticky="w", pady=5)
+        cpu_var = tk.StringVar(value=str(CPU_LIMIT))
+        cpu_entry = tk.Entry(frame, textvariable=cpu_var, fg="black")
+        cpu_entry.grid(row=0, column=1, sticky="ew")
+
+        ttk.Label(frame, text="RAM Limit (%)").grid(row=1, column=0, sticky="w", pady=5)
+        ram_var = tk.StringVar(value=str(RAM_LIMIT))
+        ram_entry = tk.Entry(frame, textvariable=ram_var, fg="black")
+        ram_entry.grid(row=1, column=1, sticky="ew")
+
+        ttk.Label(frame, text="Max Clones").grid(row=2, column=0, sticky="w", pady=5)
+        clone_var = tk.StringVar(value=str(CLONE_NUM))
+        clone_entry = tk.Entry(frame, textvariable=clone_var, fg="black")
+        clone_entry.grid(row=2, column=1, sticky="ew")
+
+        ttk.Label(frame, text="Check Interval (s)").grid(row=3, column=0, sticky="w", pady=5)
+        sleep_var = tk.StringVar(value=str(SLEEP_TIME))
+        sleep_entry = tk.Entry(frame, textvariable=sleep_var, fg="black")
+        sleep_entry.grid(row=3, column=1, sticky="ew")
+
+        frame.columnconfigure(1, weight=1)
+
+        def save_config():
+            global CPU_LIMIT, RAM_LIMIT, CLONE_NUM, SLEEP_TIME
+            try:
+                new_cpu = float(cpu_var.get())
+                new_ram = float(ram_var.get())
+                new_clones = int(clone_var.get())
+                new_sleep = int(sleep_var.get())
+
+                CPU_LIMIT = new_cpu
+                RAM_LIMIT = new_ram
+                CLONE_NUM = new_clones
+                SLEEP_TIME = new_sleep
+
+                logging.info(f"Configuration updated: CPU={new_cpu}%, RAM={new_ram}%, Clones={new_clones}, Interval={new_sleep}s")
+                config_window.destroy()
+            except ValueError:
+                logging.error("Invalid configuration value. Please enter valid numbers.")
+                # Optionally show an error message in the dialog
+
+        button_frame = ttk.Frame(frame)
+        button_frame.grid(row=4, column=0, columnspan=2, pady=20)
+        ttk.Button(button_frame, text="Save", command=save_config).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=config_window.destroy).pack(side=tk.LEFT, padx=5)
 
     def _update_tree_from_stats(self, stats_list):
         """Helper function to update the Treeview from a list of stats."""
