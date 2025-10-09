@@ -8,6 +8,8 @@ import subprocess
 import argparse
 import tkinter as tk # Keep this for the main app
 from tkinter import ttk, scrolledtext
+import base64
+import os
 
 log_buffer = deque(maxlen=1000)
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -332,7 +334,7 @@ class DockerTerminal(tk.Frame):
 class DockerMonitorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Docker Monitor")
+        self.title("Docker-Monitor-Manager")
         
         # Get screen width and height
         screen_width = self.winfo_screenwidth()
@@ -741,13 +743,108 @@ class DockerMonitorApp(tk.Tk):
 
 
 def main():
-    """Main entry point for the Docker Monitor application."""
+    """Main entry point for the Docker-Monitor-Manager application."""
+    # Ensure packaged logo is present and usable by Tkinter. We embed a tiny
+    # fallback PNG and write it to the package directory if logo.png isn't
+    # already present. This keeps installs simple while allowing the app to
+    # show an icon immediately.
+    try:
+        pkg_dir = os.path.dirname(__file__)
+        logo_path = os.path.join(pkg_dir, 'logo.png')
+        if not os.path.exists(logo_path):
+            # 1x1 transparent PNG (tiny fallback)
+            EMBEDDED_PNG_B64 = (
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAA' 
+                'AASUVORK5CYII='
+            )
+            with open(logo_path, 'wb') as f:
+                f.write(base64.b64decode(EMBEDDED_PNG_B64))
+    except Exception:
+        # Best-effort only — if writing fails, app will continue without icon.
+        pass
     # Start the background monitoring thread
     monitor = threading.Thread(target=monitor_thread, daemon=True)
     monitor.start()
 
     # Start the Tkinter GUI
     app = DockerMonitorApp()
+    # Platform-specific icon handling
+    try:
+        pkg_dir = os.path.dirname(__file__)
+        logo_path = os.path.join(pkg_dir, 'logo.png')
+        system = os.name
+        platform_system = os.sys.platform.lower()
+
+        # Helper: try to set Tk icon from file path (PhotoImage supports PNG)
+        def try_set_tk_icon(path):
+            try:
+                img = tk.PhotoImage(file=path)
+                app.iconphoto(False, img)
+                app._logo_image = img
+                return True
+            except Exception:
+                return False
+
+        # Windows: generate .ico from PNG using Pillow if available
+        if platform_system.startswith('win') or platform_system.startswith('cygwin'):
+            ico_path = os.path.join(pkg_dir, 'logo.ico')
+            if not os.path.exists(ico_path) and os.path.exists(logo_path):
+                try:
+                    from PIL import Image
+                    img = Image.open(logo_path)
+                    # Create multiple sizes for ico
+                    sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)]
+                    icons = [img.resize(s, Image.LANCZOS) for s in sizes]
+                    icons[0].save(ico_path, format='ICO', sizes=sizes)
+                except Exception:
+                    # Pillow not available or failed; fall back to PNG
+                    ico_path = None
+
+            if os.path.exists(ico_path):
+                try:
+                    # On Windows, Tkinter's iconbitmap may accept .ico
+                    app.wm_iconbitmap(ico_path)
+                except Exception:
+                    try_set_tk_icon(logo_path)
+            else:
+                try_set_tk_icon(logo_path)
+
+        # macOS: create .icns using iconutil if available (mac-only); otherwise use PNG
+        elif platform_system.startswith('darwin'):
+            icns_path = os.path.join(pkg_dir, 'logo.icns')
+            if not os.path.exists(icns_path) and os.path.exists(logo_path):
+                try:
+                    from PIL import Image
+                    # Create an .iconset directory with required sizes and run iconutil
+                    iconset_dir = os.path.join(pkg_dir, 'temp.iconset')
+                    os.makedirs(iconset_dir, exist_ok=True)
+                    base = Image.open(logo_path).convert('RGBA')
+                    sizes = [16,32,64,128,256,512]
+                    for s in sizes:
+                        img = base.resize((s,s), Image.LANCZOS)
+                        img.save(os.path.join(iconset_dir, f'icon_{s}x{s}.png'))
+                    # Attempt to run iconutil
+                    subprocess.run(['iconutil', '-c', 'icns', iconset_dir, '-o', icns_path], check=False)
+                    # cleanup temp.iconset
+                    try:
+                        for f in os.listdir(iconset_dir):
+                            os.remove(os.path.join(iconset_dir, f))
+                        os.rmdir(iconset_dir)
+                    except Exception:
+                        pass
+                except Exception:
+                    icns_path = None
+
+            # Tkinter on macOS prefers iconphoto with PNG; set icns as app icon is more involved
+            if not try_set_tk_icon(logo_path):
+                # fallback: do nothing
+                pass
+
+        # Linux and others: prefer using PNG via PhotoImage
+        else:
+            try_set_tk_icon(logo_path)
+    except Exception:
+        pass
     app.mainloop()
 
 

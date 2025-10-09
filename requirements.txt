@@ -1,1 +1,2 @@
 docker
+Pillow>=9.0.0

@@ -52,6 +52,7 @@ setup(
         "console_scripts": [
             "docker-monitor-manager=docker_monitor.main:main",
             "dmm=docker_monitor.main:main",
+            "dmm-config=docker_monitor.config_cli:main",
         ],
     },
     
