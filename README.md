@@ -1,4 +1,4 @@
-# Docker Monitor 🐳📊
+# DocMan 🐳📊
 
 A powerful desktop tool for monitoring and managing Docker containers, built with Python and Tkinter.
 
@@ -21,31 +21,63 @@ This application provides a native graphical interface for live monitoring and m
 
 ---
 
-## Getting Started 🚀
+## Installation 🚀
+
+### Option 1: Install from PyPI (Recommended)
+```bash
+pip install docker-monitor-manager
+```
+
+### Option 2: Install from Source
+```bash
+git clone https://github.com/amir-khoshdel-louyeh/docker-monitor-manager.git
+cd docker-monitor-manager
+pip install .
+```
 
 ### Prerequisites
 - **Python 3.8+**
 - **Docker Engine** (must be installed and running)
 
-### 1. Clone the Repository
+## Usage 
+
+After installation, you can run Docker Manager from anywhere using either command:
+
 ```bash
-git clone https://github.com/Amir-Sh-Dev/docker-monitor.git
-cd docker-monitor
+# Full package name
+docker-monitor-manager
+
+# Or short command
+dmm
 ```
 
-3. Open the dashboard:
-   ```
-   http://localhost:5000
-   ```
-   *(It will also auto-open in your default browser.)*
-### 2. Create and Activate a Virtual Environment
-This creates an isolated environment for the project's dependencies.
+### Development Setup
 
----
+If you want to contribute or modify the source code:
+
+### 1. Clone the Repository
+```bash
+git clone https://github.com/amir-khoshdel-louyeh/docker-monitor-manager.git
+cd docker-monitor-manager
+```
+
+### 2. Create and Activate a Virtual Environment
+
 **On macOS / Linux:**
 ```bash
 python3 -m venv venv
 source venv/bin/activate
+```
+
+**On Windows:**
+```cmd
+python -m venv venv
+venv\Scripts\activate
+```
+
+### 3. Install in Development Mode
+```bash
+pip install -e .
 ```
 
 ## Configuration ⚙️

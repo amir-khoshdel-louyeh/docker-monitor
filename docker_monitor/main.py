@@ -740,7 +740,8 @@ class DockerMonitorApp(tk.Tk):
         self.after(1000, self.update_logs)
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the Docker Monitor application."""
     # Start the background monitoring thread
     monitor = threading.Thread(target=monitor_thread, daemon=True)
     monitor.start()
@@ -748,3 +749,7 @@ if __name__ == "__main__":
     # Start the Tkinter GUI
     app = DockerMonitorApp()
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()

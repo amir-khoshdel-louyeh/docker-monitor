@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docker-monitor-manager"
+dynamic = ["version"]
+description = "A powerful desktop tool for monitoring and managing Docker containers"
+authors = [
+    {name = "Amir Khoshdel Louyeh", email = "your.email@example.com"}
+]
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+dependencies = [
+    "docker>=6.0.0",
+]
+keywords = ["docker", "monitoring", "containers", "gui", "desktop", "management"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: System :: Systems Administration",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Topic :: System :: Monitoring",
+]
+
+[project.urls]
+Homepage = "https://github.com/amir-khoshdel-louyeh/docker-monitor-manager"
+Repository = "https://github.com/amir-khoshdel-louyeh/docker-monitor-manager"
+Issues = "https://github.com/amir-khoshdel-louyeh/docker-monitor-manager/issues"
+
+[project.scripts]
+docker-monitor-manager = "docker_monitor.main:main"
+dmm = "docker_monitor.main:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "docker_monitor.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["docker_monitor*"]
+
+[tool.setuptools.package-data]
+docker_monitor = ["*.py"]
