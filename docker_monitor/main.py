@@ -588,6 +588,10 @@ class DockerMonitorApp(tk.Tk):
         
         # Initialize copy tooltip for professional hints
         self.copy_tooltip = CopyTooltip(self)
+        
+        # Initialize default resource limits
+        self.default_mem_limit = '512m'
+        self.default_cpu_limit = '1.0'
 
         self.setup_styles()
 
@@ -597,7 +601,7 @@ class DockerMonitorApp(tk.Tk):
         main_pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # --- Left Pane: Controls ---
-        controls_frame = ttk.Labelframe(main_pane, text="Controls", width=170)
+        controls_frame = ttk.Labelframe(main_pane, text="Controls", width=150)
         main_pane.add(controls_frame, weight=0)
 
         # --- Right Pane (Vertical Split) ---
@@ -632,7 +636,7 @@ class DockerMonitorApp(tk.Tk):
                 self.update_idletasks()
                 
                 # Left panel (controls) should be narrow
-                self._main_pane.sashpos(0, 200)
+                self._main_pane.sashpos(0, 170)
                 
                 # Top section (containers/tabs) should take about 60% of vertical space
                 # Use actual window height instead of screen height
@@ -641,7 +645,7 @@ class DockerMonitorApp(tk.Tk):
                 
                 # Bottom pane (logs/terminal) should be 50-50 horizontal split
                 # Calculate based on actual available width
-                actual_width = self.winfo_width() - 200 - 40  # subtract controls and padding
+                actual_width = self.winfo_width() - 170 - 40  # subtract controls and padding
                 self._bottom_pane.sashpos(0, actual_width // 2)
             except Exception as e:
                 logging.error(f"Error setting sash positions: {e}")
@@ -754,6 +758,38 @@ class DockerMonitorApp(tk.Tk):
         except Exception as e:
             logging.warning(f"Could not set custom tab layout: {e}")
 
+    def _create_control_button(self, parent, text, bg_color, command, fg_color='white'):
+        """
+        Create a standardized control button with consistent sizing.
+        
+        Args:
+            parent: Parent widget
+            text: Button text
+            bg_color: Background color
+            command: Button command/callback
+            fg_color: Foreground (text) color, defaults to white
+            
+        Returns:
+            tk.Button: Configured button widget
+        """
+        btn = tk.Button(
+            parent,
+            text=text,
+            bg=bg_color,
+            fg=fg_color,
+            command=command,
+            font=('Segoe UI', 9, 'bold'),
+            cursor='hand2',
+            relief='flat',
+            width=15,
+            height=1,
+            anchor='center'
+        )
+        # Add hover effect
+        btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
+        btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+        return btn
+
     def create_control_widgets(self, parent):
         # Create a canvas with scrollbar for controls
         canvas = tk.Canvas(parent, bg='#222831', highlightthickness=0)
@@ -802,15 +838,19 @@ class DockerMonitorApp(tk.Tk):
         # Use scrollable_frame as the parent for all controls
         parent = scrollable_frame
         
-        # --- Selected Container Section ---
-        ttk.Label(parent, text="Selected Container", font=('Segoe UI', 9)).pack(pady=(10, 0), padx=10, anchor='w')
-        self.selected_container_label = ttk.Label(parent, text="None", font=('Segoe UI', 10, 'bold'), foreground=self.ACCENT_COLOR)
-        self.selected_container_label.pack(pady=5)
         # --- Individual Actions Section ---
         # Keep the original frame and button ordering. We'll put per-tab
         # action panels inside this frame so the layout stays identical.
         individual_actions_frame = ttk.Frame(parent)
         individual_actions_frame.pack(pady=5, padx=10, fill=tk.X)
+
+        # --- Selected Container Section (at the top of actions frame) ---
+        self.selected_section_frame = ttk.Frame(individual_actions_frame)
+        self.selected_section_frame.pack(pady=(5, 10), padx=5, fill=tk.X)
+        
+        ttk.Label(self.selected_section_frame, text="Selected Item", font=('Segoe UI', 9)).pack(anchor='w')
+        self.selected_container_label = ttk.Label(self.selected_section_frame, text="None", font=('Segoe UI', 10, 'bold'), foreground=self.ACCENT_COLOR)
+        self.selected_container_label.pack(pady=5)
 
         # Container action panel (packed by default)
         self.container_actions_panel = ttk.Frame(individual_actions_frame)
@@ -827,22 +867,15 @@ class DockerMonitorApp(tk.Tk):
         ]
 
         for label, color, action in actions:
-            btn = tk.Button(
+            fg = 'black' if color == '#d4c100' else 'white'
+            btn = self._create_control_button(
                 self.container_actions_panel,
-                text=label,
-                bg=color,
-                fg='black' if color in ['#d4c100'] else 'white',
-                command=lambda a=action: self.run_container_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_container_action(a),
+                fg
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            # Add hover effect
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Network action panel with icons
         self.network_actions_panel = ttk.Frame(individual_actions_frame)
@@ -855,21 +888,13 @@ class DockerMonitorApp(tk.Tk):
             ('🧹 Prune', '#6c757d', 'prune')
         ]
         for label, color, action in net_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.network_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_network_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_network_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Images action panel with icons
         self.images_actions_panel = ttk.Frame(individual_actions_frame)
@@ -880,21 +905,13 @@ class DockerMonitorApp(tk.Tk):
             ('🏷️ Tag', '#00ADB5', 'tag')
         ]
         for label, color, action in img_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.images_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_image_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_image_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Volumes action panel with icons
         self.volumes_actions_panel = ttk.Frame(individual_actions_frame)
@@ -905,21 +922,13 @@ class DockerMonitorApp(tk.Tk):
             ('➕ Create', '#2d6a4f', 'create')
         ]
         for label, color, action in vol_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.volumes_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_volume_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_volume_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Dashboard action panel
         self.dashboard_actions_panel = ttk.Frame(individual_actions_frame)
@@ -928,21 +937,13 @@ class DockerMonitorApp(tk.Tk):
             ('🗑️ Prune System', '#b80000', 'prune'),
         ]
         for label, color, action in dash_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.dashboard_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_dashboard_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_dashboard_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Compose action panel
         self.compose_actions_panel = ttk.Frame(individual_actions_frame)
@@ -953,21 +954,13 @@ class DockerMonitorApp(tk.Tk):
             ('📋 Logs', '#6c757d', 'logs'),
         ]
         for label, color, action in compose_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.compose_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_compose_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_compose_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Info action panel
         self.info_actions_panel = ttk.Frame(individual_actions_frame)
@@ -976,21 +969,13 @@ class DockerMonitorApp(tk.Tk):
             ('📋 Copy to Clipboard', '#6c757d', 'copy'),
         ]
         for label, color, action in info_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.info_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_info_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_info_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # Help action panel
         self.help_actions_panel = ttk.Frame(individual_actions_frame)
@@ -999,21 +984,39 @@ class DockerMonitorApp(tk.Tk):
             ('ℹ️ About', '#6c757d', 'about'),
         ]
         for label, color, action in help_actions:
-            btn = tk.Button(
+            btn = self._create_control_button(
                 self.help_actions_panel,
-                text=label,
-                bg=color,
-                fg='white',
-                command=lambda a=action: self.run_help_action(a),
-                font=('Segoe UI', 9, 'bold'),
-                cursor='hand2',
-                relief='flat',
-                padx=5,
-                pady=8
+                label,
+                color,
+                lambda a=action: self.run_help_action(a)
             )
-            btn.pack(fill=tk.BOTH, expand=True, pady=2, padx=5)
-            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
-            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
+
+        # Settings action panel - Advanced Operations
+        self.settings_actions_panel = ttk.Frame(individual_actions_frame)
+        
+        # Warning label
+        warning_label = tk.Label(
+            self.settings_actions_panel,
+            text="⚠️  Use with caution!",
+            font=('Segoe UI', 8, 'italic'),
+            fg='#ff6b6b',
+            bg=self.FRAME_BG
+        )
+        warning_label.pack(pady=(5, 10), padx=5)
+        
+        settings_actions = [
+            ('⏹️ Stop All Containers', '#e67e22', self.stop_all_containers),
+            ('🗑️ Remove Stopped', '#c0392b', self.remove_all_stopped),
+        ]
+        for label, color, cmd in settings_actions:
+            btn = self._create_control_button(
+                self.settings_actions_panel,
+                label,
+                color,
+                cmd
+            )
+            btn.pack(fill=tk.X, expand=False, pady=2, padx=5)
 
         # --- Separator ---
         ttk.Separator(parent, orient='horizontal').pack(fill='x', pady=15, padx=10)
@@ -1139,8 +1142,12 @@ class DockerMonitorApp(tk.Tk):
         self.tree = ttk.Treeview(containers_tab, columns=cols, show='headings', selectmode='browse')
         for col in cols:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=100, anchor=tk.CENTER)
-        self.tree.column('Name', width=200)
+            if col == 'ID':
+                self.tree.column(col, width=110, anchor=tk.CENTER)  # Fixed width for short ID
+            elif col == 'Name':
+                self.tree.column(col, width=200, anchor=tk.W)  # Wider for names
+            else:
+                self.tree.column(col, width=100, anchor=tk.CENTER)
 
         # Only vertical scrollbar
         scrollbar_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -1207,8 +1214,12 @@ class DockerMonitorApp(tk.Tk):
         self.network_tree = ttk.Treeview(network_tab, columns=net_cols, show='headings', selectmode='browse')
         for col in net_cols:
             self.network_tree.heading(col, text=col)
-            self.network_tree.column(col, width=120, anchor=tk.CENTER)
-        self.network_tree.column('Name', width=200)
+            if col == 'ID':
+                self.network_tree.column(col, width=110, anchor=tk.CENTER)  # Fixed width for short ID
+            elif col == 'Name':
+                self.network_tree.column(col, width=200, anchor=tk.W)  # Wider for names
+            else:
+                self.network_tree.column(col, width=120, anchor=tk.CENTER)
 
         # Only vertical scrollbar (no horizontal)
         net_scroll_y = ttk.Scrollbar(net_frame, orient=tk.VERTICAL, command=self.network_tree.yview)
@@ -1275,8 +1286,12 @@ class DockerMonitorApp(tk.Tk):
         self.images_tree = ttk.Treeview(images_tab, columns=img_cols, show='headings', selectmode='browse')
         for col in img_cols:
             self.images_tree.heading(col, text=col)
-            self.images_tree.column(col, width=120, anchor=tk.CENTER)
-        self.images_tree.column('Repository:Tag', width=250)
+            if col == 'ID':
+                self.images_tree.column(col, width=110, anchor=tk.CENTER)  # Fixed width for short ID
+            elif col == 'Repository:Tag':
+                self.images_tree.column(col, width=250, anchor=tk.W)  # Wider for repo:tag
+            else:
+                self.images_tree.column(col, width=120, anchor=tk.CENTER)
 
         # Only vertical scrollbar (no horizontal)
         img_scroll_y = ttk.Scrollbar(img_frame, orient=tk.VERTICAL, command=self.images_tree.yview)
@@ -1343,7 +1358,10 @@ class DockerMonitorApp(tk.Tk):
         self.volumes_tree = ttk.Treeview(volumes_tab, columns=vol_cols, show='headings', selectmode='browse')
         for col in vol_cols:
             self.volumes_tree.heading(col, text=col)
-            self.volumes_tree.column(col, width=150, anchor=tk.CENTER)
+            if col == 'Name':
+                self.volumes_tree.column(col, width=180, anchor=tk.W)  # Fixed width for names
+            else:
+                self.volumes_tree.column(col, width=150, anchor=tk.CENTER)
 
         # Only vertical scrollbar (no horizontal)
         vol_scroll_y = ttk.Scrollbar(vol_frame, orient=tk.VERTICAL, command=self.volumes_tree.yview)
@@ -1449,19 +1467,6 @@ class DockerMonitorApp(tk.Tk):
         self._create_stat_card(cards_frame, "💾 Volumes", self.dash_volumes_count, "#ffaa00", 1, 0)
         self._create_stat_card(cards_frame, "🌐 Networks", self.dash_networks_count, "#aa88ff", 1, 1)
 
-        # Recent Activity Section
-        activity_label = tk.Label(dash_content, text="📋 Recent Activity", 
-                                 font=('Segoe UI', 14, 'bold'), fg='#00ff88', bg='#1e2a35')
-        activity_label.pack(pady=(20, 10), anchor='w')
-
-        self.dash_activity_text = scrolledtext.ScrolledText(
-            dash_content, height=10, wrap=tk.WORD, 
-            bg="#2a3a4a", fg="#e0e0e0", font=("Consolas", 9),
-            relief='flat', borderwidth=2
-        )
-        self.dash_activity_text.pack(fill=tk.BOTH, expand=True, pady=5)
-        self.dash_activity_text.config(state='disabled')
-
         # Quick Actions Section
         actions_label = tk.Label(dash_content, text="⚡ Quick Actions", 
                                 font=('Segoe UI', 14, 'bold'), fg='#00ff88', bg='#1e2a35')
@@ -1477,8 +1482,22 @@ class DockerMonitorApp(tk.Tk):
         ]
 
         for text, command in quick_actions:
-            btn = tk.Button(quick_actions_frame, text=text, bg='#00ADB5', fg='white',
-                          font=('Segoe UI', 10, 'bold'), command=command, relief='flat', padx=20, pady=10)
+            btn = tk.Button(
+                quick_actions_frame,
+                text=text,
+                bg='#00ADB5',
+                fg='white',
+                font=('Segoe UI', 9, 'bold'),
+                command=command,
+                relief='flat',
+                width=15,
+                height=1,
+                anchor='center',
+                cursor='hand2'
+            )
+            # Add hover effect
+            btn.bind('<Enter>', lambda e, b=btn: b.config(relief='raised'))
+            btn.bind('<Leave>', lambda e, b=btn: b.config(relief='flat'))
             btn.pack(side=tk.LEFT, padx=5)
 
         # Now bind mouse wheel to all widgets in dashboard
@@ -1690,36 +1709,37 @@ class DockerMonitorApp(tk.Tk):
                             bg='#ffffff', fg='#000000', font=('Segoe UI', 9))
         cpu_entry.pack(side=tk.LEFT, padx=5)
         
-        apply_limits_btn = tk.Button(limits_inner, text='✓ Apply Defaults', 
+        apply_limits_btn = tk.Button(limits_inner, text='✓ Apply Changes', 
                                      bg='#4ecdc4', fg='white', font=('Segoe UI', 9, 'bold'),
-                                     relief='flat', cursor='hand2', padx=15, pady=6)
+                                     relief='flat', cursor='hand2', padx=15, pady=6,
+                                     command=self.apply_default_limits)
         apply_limits_btn.pack(pady=(8, 0))
 
-        # Advanced Operations Card
-        advanced_card = tk.Frame(left_column, bg='#2a3a4a', relief='flat')
-        advanced_card.pack(fill=tk.X, pady=(0, 8))
+        # Export System Report Card
+        export_card = tk.Frame(left_column, bg='#2a3a4a', relief='flat')
+        export_card.pack(fill=tk.X, pady=(0, 8))
         
-        advanced_inner = tk.Frame(advanced_card, bg='#2a3a4a')
-        advanced_inner.pack(fill=tk.X, padx=10, pady=10)
+        export_inner = tk.Frame(export_card, bg='#2a3a4a')
+        export_inner.pack(fill=tk.X, padx=10, pady=10)
         
-        advanced_label = tk.Label(advanced_inner, text="🔧 Advanced Operations", 
-                                font=('Segoe UI', 11, 'bold'), fg='#ffa94d', bg='#2a3a4a')
-        advanced_label.pack(anchor='w', pady=(0, 3))
+        export_label = tk.Label(export_inner, text="📄 Export System Report", 
+                               font=('Segoe UI', 11, 'bold'), fg='#ffd93d', bg='#2a3a4a')
+        export_label.pack(anchor='w', pady=(0, 3))
         
-        advanced_desc = tk.Label(advanced_inner, text="⚠️  Use with caution!", 
-                               font=('Segoe UI', 8, 'italic'), fg='#ff6b6b', bg='#2a3a4a')
-        advanced_desc.pack(anchor='w', pady=(0, 10))
+        export_desc = tk.Label(export_inner, text="Save complete system snapshot", 
+                              font=('Segoe UI', 8), fg='#999999', bg='#2a3a4a')
+        export_desc.pack(anchor='w', pady=(0, 10))
         
-        adv_btns = [
-            ('⏹️ Stop All', '#e67e22', self.stop_all_containers),
-            ('🗑️ Remove Stopped', '#c0392b', self.remove_all_stopped),
-        ]
+        export_btn = tk.Button(export_inner, text='💾 Export Full Report', 
+                              bg='#ffd93d', fg='#1e1e1e', font=('Segoe UI', 9, 'bold'),
+                              relief='flat', cursor='hand2', padx=15, pady=8,
+                              command=self.export_system_report)
+        export_btn.pack(fill=tk.X)
         
-        for text, color, cmd in adv_btns:
-            btn = tk.Button(advanced_inner, text=text, bg=color, fg='white',
-                          font=('Segoe UI', 9, 'bold'), command=cmd, relief='flat', 
-                          padx=15, pady=8, cursor='hand2')
-            btn.pack(side=tk.LEFT, padx=(0, 5), expand=True, fill=tk.X)
+        export_note = tk.Label(export_inner, 
+                              text="Includes: logs, containers, images, networks, volumes,\nsystem info, disk usage, and settings", 
+                              font=('Segoe UI', 7), fg='#777777', bg='#2a3a4a', justify=tk.LEFT)
+        export_note.pack(anchor='w', pady=(5, 0))
 
         # === RIGHT COLUMN ===
         
@@ -1777,34 +1797,6 @@ class DockerMonitorApp(tk.Tk):
         )
         self.disk_usage_text.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
-        # === BOTTOM: Log Output (Full Width) ===
-        log_card = tk.Frame(settings_scrollable_frame, bg='#2a3a4a', relief='flat')
-        log_card.pack(fill=tk.X, padx=15, pady=(0, 15))
-        
-        log_header = tk.Frame(log_card, bg='#2a3a4a')
-        log_header.pack(fill=tk.X, padx=10, pady=(10, 5))
-        
-        log_label = tk.Label(log_header, text="📟 Operation Log", 
-                           font=('Segoe UI', 10, 'bold'), fg='#00ff88', bg='#2a3a4a')
-        log_label.pack(side=tk.LEFT)
-        
-        clear_log_btn = tk.Button(log_header, text='🗑️ Clear', 
-                                 command=self.clear_settings_log,
-                                 bg='#dc3545', fg='white', font=('Segoe UI', 8, 'bold'),
-                                 relief='flat', cursor='hand2', padx=10, pady=3)
-        clear_log_btn.pack(side=tk.RIGHT)
-        
-        log_inner = tk.Frame(log_card, bg='#2a3a4a')
-        log_inner.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-        self.settings_log_text = scrolledtext.ScrolledText(
-            log_inner, height=6, wrap=tk.WORD,
-            bg="#1e1e1e", fg="#00ff99", font=("Consolas", 8),
-            relief='flat', borderwidth=0, insertbackground='#00ff99'
-        )
-        self.settings_log_text.pack(fill=tk.X)
-        self.settings_log_text.config(state='disabled')
-
         # Bind mousewheel to all widgets in settings
         bind_settings_to_mousewheel(settings_scrollable_frame)
 
@@ -1817,9 +1809,9 @@ class DockerMonitorApp(tk.Tk):
         notebook.add(info_tab, text='💡 Info')
 
         # Info tab displays detailed information about selected items
-        info_label = tk.Label(info_tab, text='Select an item from any tab to view detailed information', 
+        self.info_placeholder_label = tk.Label(info_tab, text='Select an item from any tab to view detailed information', 
                              font=('Segoe UI', 10, 'italic'), foreground='#00d4ff', bg='#1e2a35')
-        info_label.pack(pady=20)
+        self.info_placeholder_label.pack(pady=20)
 
         # Create a scrolled text widget for displaying detailed info
         self.info_text = scrolledtext.ScrolledText(
@@ -1962,14 +1954,11 @@ class DockerMonitorApp(tk.Tk):
             "  - Images: Total Docker images on your system\n"
             "  - Volumes: Total Docker volumes\n"
             "  - Networks: Total Docker networks\n\n"
-            "Recent Activity:\n"
-            "  - Shows a log of recent Docker operations\n"
-            "  - Auto-updates to track your actions\n\n"
             "Quick Actions:\n"
             "  - Refresh All: Update all dashboard statistics\n"
             "  - Prune System: Clean up unused Docker objects (images, containers, networks, volumes)\n"
             "  - System Info: Display detailed Docker system information\n\n"
-            "Tip: Use this tab for a quick overview of your Docker environment")
+            "Tip: Use this tab for a quick overview of your Docker environment. All operations are logged in the main application log.")
 
         self._add_help_section(help_content, " Compose Tab", 
             "Docker Compose project management:\n\n"
@@ -2156,18 +2145,7 @@ class DockerMonitorApp(tk.Tk):
     def refresh_dashboard(self):
         """Manually refresh dashboard."""
         self.update_dashboard()
-        self._add_dashboard_activity("Dashboard refreshed manually")
-
-    def _add_dashboard_activity(self, message):
-        """Add activity message to dashboard."""
-        try:
-            timestamp = time.strftime("%H:%M:%S")
-            self.dash_activity_text.config(state='normal')
-            self.dash_activity_text.insert(tk.END, f"[{timestamp}] {message}\n")
-            self.dash_activity_text.see(tk.END)
-            self.dash_activity_text.config(state='disabled')
-        except Exception:
-            pass
+        logging.info("📊 Dashboard refreshed manually")
 
     def prune_system(self):
         """Prune unused Docker objects."""
@@ -2179,8 +2157,7 @@ class DockerMonitorApp(tk.Tk):
                     client.containers.prune()
                     client.networks.prune()
                     client.images.prune()
-                logging.info("System pruned successfully")
-                self._add_dashboard_activity("System pruned successfully")
+                logging.info("✅ System pruned successfully")
                 messagebox.showinfo('Success', 'System pruned successfully!')
             except Exception as e:
                 logging.error(f"Error pruning system: {e}")
@@ -2222,35 +2199,272 @@ class DockerMonitorApp(tk.Tk):
         except Exception as e:
             messagebox.showerror('Error', f'Failed to get system info: {e}')
 
+    # --- Settings Tab Methods ---
+    def export_system_report(self):
+        """Export complete system report to a text file."""
+        from tkinter import filedialog
+        import datetime
+        
+        # Ask user for save location
+        default_filename = f"docker_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile=default_filename,
+            title="Save System Report"
+        )
+        
+        if not filepath:
+            return
+        
+        logging.info(f"📄 Exporting system report to: {filepath}")
+        self.status_bar.config(text="📄 Generating system report...")
+        
+        def generate_report():
+            try:
+                report_lines = []
+                timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Header
+                report_lines.append("=" * 80)
+                report_lines.append("🐳 DOCKER SYSTEM REPORT")
+                report_lines.append("=" * 80)
+                report_lines.append(f"Generated: {timestamp}")
+                report_lines.append(f"Application: Docker Monitor Manager")
+                report_lines.append("=" * 80)
+                report_lines.append("")
+                
+                with docker_lock:
+                    # Docker System Information
+                    report_lines.append("\n" + "=" * 80)
+                    report_lines.append("📊 DOCKER SYSTEM INFORMATION")
+                    report_lines.append("=" * 80)
+                    try:
+                        info = client.info()
+                        version = client.version()
+                        report_lines.append(f"Docker Version: {version.get('Version', 'N/A')}")
+                        report_lines.append(f"API Version: {version.get('ApiVersion', 'N/A')}")
+                        report_lines.append(f"OS/Arch: {info.get('OperatingSystem', 'N/A')} / {info.get('Architecture', 'N/A')}")
+                        report_lines.append(f"Server Version: {info.get('ServerVersion', 'N/A')}")
+                        report_lines.append(f"Storage Driver: {info.get('Driver', 'N/A')}")
+                        report_lines.append(f"Logging Driver: {info.get('LoggingDriver', 'N/A')}")
+                        report_lines.append(f"Docker Root Dir: {info.get('DockerRootDir', 'N/A')}")
+                        report_lines.append(f"\nSystem Resources:")
+                        report_lines.append(f"  Total Memory: {info.get('MemTotal', 0) / (1024**3):.2f} GB")
+                        report_lines.append(f"  CPUs: {info.get('NCPU', 'N/A')}")
+                        report_lines.append(f"\nDocker Objects:")
+                        report_lines.append(f"  Containers: {info.get('Containers', 0)} (Running: {info.get('ContainersRunning', 0)}, Stopped: {info.get('ContainersStopped', 0)}, Paused: {info.get('ContainersPaused', 0)})")
+                        report_lines.append(f"  Images: {info.get('Images', 0)}")
+                    except Exception as e:
+                        report_lines.append(f"Error fetching system info: {e}")
+                    
+                    # Containers
+                    report_lines.append("\n" + "=" * 80)
+                    report_lines.append("📦 CONTAINERS")
+                    report_lines.append("=" * 80)
+                    try:
+                        containers = client.containers.list(all=True)
+                        if containers:
+                            for container in containers:
+                                report_lines.append(f"\nContainer: {container.name}")
+                                report_lines.append(f"  ID: {container.short_id}")
+                                report_lines.append(f"  Status: {container.status}")
+                                report_lines.append(f"  Image: {container.image.tags[0] if container.image.tags else container.image.short_id}")
+                                report_lines.append(f"  Created: {container.attrs.get('Created', 'N/A')}")
+                                
+                                # Ports
+                                ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
+                                if ports:
+                                    report_lines.append(f"  Ports: {ports}")
+                                
+                                # Networks
+                                networks = container.attrs.get('NetworkSettings', {}).get('Networks', {})
+                                if networks:
+                                    report_lines.append(f"  Networks: {', '.join(networks.keys())}")
+                        else:
+                            report_lines.append("No containers found.")
+                    except Exception as e:
+                        report_lines.append(f"Error fetching containers: {e}")
+                    
+                    # Images
+                    report_lines.append("\n" + "=" * 80)
+                    report_lines.append("🖼️  IMAGES")
+                    report_lines.append("=" * 80)
+                    try:
+                        images = client.images.list()
+                        if images:
+                            for img in images:
+                                tags = img.tags if img.tags else ['<none>']
+                                report_lines.append(f"\nImage: {', '.join(tags)}")
+                                report_lines.append(f"  ID: {img.short_id}")
+                                report_lines.append(f"  Size: {img.attrs.get('Size', 0) / (1024**2):.2f} MB")
+                                report_lines.append(f"  Created: {img.attrs.get('Created', 'N/A')}")
+                        else:
+                            report_lines.append("No images found.")
+                    except Exception as e:
+                        report_lines.append(f"Error fetching images: {e}")
+                    
+                    # Networks
+                    report_lines.append("\n" + "=" * 80)
+                    report_lines.append("🌐 NETWORKS")
+                    report_lines.append("=" * 80)
+                    try:
+                        networks = client.networks.list()
+                        if networks:
+                            for net in networks:
+                                report_lines.append(f"\nNetwork: {net.name}")
+                                report_lines.append(f"  ID: {net.short_id}")
+                                report_lines.append(f"  Driver: {net.attrs.get('Driver', 'N/A')}")
+                                report_lines.append(f"  Scope: {net.attrs.get('Scope', 'N/A')}")
+                                containers_in_net = net.attrs.get('Containers', {})
+                                if containers_in_net:
+                                    report_lines.append(f"  Connected Containers: {len(containers_in_net)}")
+                        else:
+                            report_lines.append("No networks found.")
+                    except Exception as e:
+                        report_lines.append(f"Error fetching networks: {e}")
+                    
+                    # Volumes
+                    report_lines.append("\n" + "=" * 80)
+                    report_lines.append("💾 VOLUMES")
+                    report_lines.append("=" * 80)
+                    try:
+                        volumes = client.volumes.list()
+                        if volumes:
+                            for vol in volumes:
+                                report_lines.append(f"\nVolume: {vol.name}")
+                                report_lines.append(f"  Driver: {vol.attrs.get('Driver', 'N/A')}")
+                                report_lines.append(f"  Mountpoint: {vol.attrs.get('Mountpoint', 'N/A')}")
+                                labels = vol.attrs.get('Labels', {})
+                                if labels:
+                                    report_lines.append(f"  Labels: {labels}")
+                        else:
+                            report_lines.append("No volumes found.")
+                    except Exception as e:
+                        report_lines.append(f"Error fetching volumes: {e}")
+                    
+                    # Disk Usage
+                    report_lines.append("\n" + "=" * 80)
+                    report_lines.append("💽 DISK USAGE")
+                    report_lines.append("=" * 80)
+                    try:
+                        df = client.df()
+                        
+                        containers_size = sum(c.get('SizeRw', 0) for c in df.get('Containers', []))
+                        report_lines.append(f"\nContainers: {len(df.get('Containers', []))} total")
+                        report_lines.append(f"  Total Size: {containers_size / (1024**3):.2f} GB")
+                        
+                        images_size = sum(img.get('Size', 0) for img in df.get('Images', []))
+                        report_lines.append(f"\nImages: {len(df.get('Images', []))} total")
+                        report_lines.append(f"  Total Size: {images_size / (1024**3):.2f} GB")
+                        
+                        volumes = df.get('Volumes', [])
+                        volumes_size = sum(v.get('UsageData', {}).get('Size', 0) for v in volumes if v.get('UsageData'))
+                        report_lines.append(f"\nVolumes: {len(volumes)} total")
+                        report_lines.append(f"  Total Size: {volumes_size / (1024**3):.2f} GB")
+                        
+                        build_cache = df.get('BuildCache', [])
+                        cache_size = sum(b.get('Size', 0) for b in build_cache)
+                        report_lines.append(f"\nBuild Cache: {len(build_cache)} entries")
+                        report_lines.append(f"  Total Size: {cache_size / (1024**3):.2f} GB")
+                        
+                        total_size = containers_size + images_size + volumes_size + cache_size
+                        report_lines.append(f"\nTOTAL DISK USAGE: {total_size / (1024**3):.2f} GB")
+                    except Exception as e:
+                        report_lines.append(f"Error fetching disk usage: {e}")
+                
+                # Application Settings
+                report_lines.append("\n" + "=" * 80)
+                report_lines.append("⚙️  APPLICATION SETTINGS")
+                report_lines.append("=" * 80)
+                report_lines.append(f"Default Memory Limit: {self.default_mem_limit}")
+                report_lines.append(f"Default CPU Limit: {self.default_cpu_limit}")
+                report_lines.append(f"Auto-refresh: {'Enabled' if hasattr(self, 'auto_refresh_var') and self.auto_refresh_var.get() else 'Disabled'}")
+                if hasattr(self, 'refresh_interval_var'):
+                    report_lines.append(f"Refresh Interval: {self.refresh_interval_var.get()} seconds")
+                
+                # Application Logs
+                report_lines.append("\n" + "=" * 80)
+                report_lines.append("📋 APPLICATION LOGS")
+                report_lines.append("=" * 80)
+                if log_buffer:
+                    report_lines.append(f"Total log entries: {len(log_buffer)}")
+                    report_lines.append("\nRecent logs:")
+                    for log_entry in log_buffer:
+                        report_lines.append(f"  {log_entry}")
+                else:
+                    report_lines.append("No logs available.")
+                
+                # Footer
+                report_lines.append("\n" + "=" * 80)
+                report_lines.append("END OF REPORT")
+                report_lines.append("=" * 80)
+                
+                # Write to file
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write('\n'.join(report_lines))
+                
+                self.after(0, lambda: logging.info(f"✅ System report exported successfully to: {filepath}"))
+                self.after(0, lambda: messagebox.showinfo('Success', f'System report exported successfully!\n\nFile: {filepath}'))
+                self.after(0, self.status_bar.config, {"text": "✅ Report exported successfully"})
+                
+            except Exception as e:
+                self.after(0, lambda: logging.error(f"Failed to export system report: {e}"))
+                self.after(0, lambda: messagebox.showerror('Error', f'Failed to export report:\n{e}'))
+                self.after(0, self.status_bar.config, {"text": "❌ Export failed"})
+        
+        threading.Thread(target=generate_report, daemon=True).start()
+    
+    def apply_default_limits(self):
+        """Apply default resource limits."""
+        try:
+            mem_limit = self.mem_limit_var.get().strip()
+            cpu_limit = self.cpu_limit_var.get().strip()
+            
+            # Validate memory limit format (e.g., 512m, 1g, 2048m)
+            if not mem_limit or not any(mem_limit.endswith(suffix) for suffix in ['m', 'M', 'g', 'G', 'k', 'K']):
+                messagebox.showerror('Error', 'Invalid memory limit format!\n\nExamples: 512m, 1g, 2048m')
+                return
+            
+            # Validate CPU limit (should be a number)
+            try:
+                cpu_val = float(cpu_limit)
+                if cpu_val <= 0:
+                    raise ValueError()
+            except ValueError:
+                messagebox.showerror('Error', 'Invalid CPU limit!\n\nMust be a positive number (e.g., 1.0, 2.5)')
+                return
+            
+            # Store the values as instance variables
+            self.default_mem_limit = mem_limit
+            self.default_cpu_limit = cpu_limit
+            
+            logging.info(f"✓ Default limits set: Memory={mem_limit}, CPU={cpu_limit}")
+            messagebox.showinfo('Success', 
+                f'Default resource limits applied:\n\n'
+                f'💾 Memory: {mem_limit}\n'
+                f'⚡ CPU: {cpu_limit}\n\n'
+                f'These limits will be used when creating new containers.')
+            self.status_bar.config(text=f"✓ Default limits: Mem={mem_limit}, CPU={cpu_limit}")
+            
+        except Exception as e:
+            logging.error(f"Failed to apply default limits: {e}")
+            messagebox.showerror('Error', f'Failed to apply limits: {e}')
+
     # --- Compose Tab Methods ---
-    def _settings_log(self, message):
-        """Add output message to settings log area."""
-        self.settings_log_text.config(state='normal')
-        timestamp = time.strftime("%H:%M:%S")
-        self.settings_log_text.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.settings_log_text.see(tk.END)
-        self.settings_log_text.config(state='disabled')
-
-    def clear_settings_log(self):
-        """Clear settings log."""
-        self.settings_log_text.config(state='normal')
-        self.settings_log_text.delete('1.0', tk.END)
-        self.settings_log_text.config(state='disabled')
-        self.status_bar.config(text="🗑️ Log cleared")
-
     def toggle_auto_refresh(self):
         """Toggle auto-refresh on/off."""
         if self.auto_refresh_var.get():
-            self._settings_log("✓ Auto-refresh enabled")
+            logging.info("✓ Auto-refresh enabled")
             self.status_bar.config(text="🔄 Auto-refresh enabled")
         else:
-            self._settings_log("⏸️ Auto-refresh disabled")
+            logging.info("⏸️ Auto-refresh disabled")
             self.status_bar.config(text="⏸️ Auto-refresh disabled")
 
     def update_refresh_interval(self):
         """Update refresh interval."""
         interval = self.refresh_interval_var.get()
-        self._settings_log(f"⏱️ Refresh interval set to {interval} seconds")
+        logging.info(f"⏱️ Refresh interval set to {interval} seconds")
         self.status_bar.config(text=f"⏱️ Refresh interval: {interval}s")
 
     def prune_system(self):
@@ -2267,28 +2481,28 @@ class DockerMonitorApp(tk.Tk):
         if not confirm:
             return
         
-        self._settings_log("🧹 Starting system prune...")
+        logging.info("🧹 Starting system prune...")
         self.status_bar.config(text="🔄 Pruning system...")
         
         def prune():
             try:
                 result = client.containers.prune()
-                self.after(0, self._settings_log, f"✓ Removed {len(result.get('ContainersDeleted', []))} containers")
+                self.after(0, lambda: logging.info(f"✓ Removed {len(result.get('ContainersDeleted', []))} containers"))
                 
                 result = client.images.prune()
-                self.after(0, self._settings_log, f"✓ Removed {len(result.get('ImagesDeleted', []))} images")
+                self.after(0, lambda: logging.info(f"✓ Removed {len(result.get('ImagesDeleted', []))} images"))
                 
                 result = client.networks.prune()
-                self.after(0, self._settings_log, f"✓ Removed {len(result.get('NetworksDeleted', []))} networks")
+                self.after(0, lambda: logging.info(f"✓ Removed {len(result.get('NetworksDeleted', []))} networks"))
                 
                 result = client.volumes.prune()
-                self.after(0, self._settings_log, f"✓ Removed {len(result.get('VolumesDeleted', []))} volumes")
+                self.after(0, lambda: logging.info(f"✓ Removed {len(result.get('VolumesDeleted', []))} volumes"))
                 
-                self.after(0, self._settings_log, "✅ System prune completed!")
+                self.after(0, lambda: logging.info("✅ System prune completed!"))
                 self.after(0, self.status_bar.config, {"text": "✅ System pruned successfully"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
                 self.after(0, self.status_bar.config, {"text": f"❌ Prune failed: {e}"})
         
         threading.Thread(target=prune, daemon=True).start()
@@ -2299,17 +2513,17 @@ class DockerMonitorApp(tk.Tk):
         if not confirm:
             return
         
-        self._settings_log("🧹 Pruning stopped containers...")
+        logging.info("🧹 Pruning stopped containers...")
         
         def prune():
             try:
                 result = client.containers.prune()
                 count = len(result.get('ContainersDeleted', []))
-                self.after(0, self._settings_log, f"✅ Removed {count} stopped containers")
+                self.after(0, lambda: logging.info(f"✅ Removed {count} stopped containers"))
                 self.after(0, self.status_bar.config, {"text": f"✅ Removed {count} containers"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
         
         threading.Thread(target=prune, daemon=True).start()
 
@@ -2319,37 +2533,43 @@ class DockerMonitorApp(tk.Tk):
         if not confirm:
             return
         
-        self._settings_log("🧹 Pruning unused images...")
+        logging.info("🧹 Pruning unused images...")
         
         def prune():
             try:
                 result = client.images.prune(filters={'dangling': False})
                 count = len(result.get('ImagesDeleted', []))
-                self.after(0, self._settings_log, f"✅ Removed {count} images")
+                self.after(0, lambda: logging.info(f"✅ Removed {count} images"))
                 self.after(0, self.status_bar.config, {"text": f"✅ Removed {count} images"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
         
         threading.Thread(target=prune, daemon=True).start()
 
     def prune_networks(self):
         """Remove unused networks."""
-        confirm = messagebox.askyesno('Confirm', 'Remove all unused networks?')
+        confirm = messagebox.askyesno(
+            '⚠️  Confirm Network Prune', 
+            'This will remove all unused networks!\n\n'
+            'Networks currently not connected to any containers will be deleted.\n'
+            'Built-in networks (bridge, host, none) will not be removed.\n\n'
+            'Continue?'
+        )
         if not confirm:
             return
         
-        self._settings_log("🧹 Pruning unused networks...")
+        logging.info("🧹 Pruning unused networks...")
         
         def prune():
             try:
                 result = client.networks.prune()
                 count = len(result.get('NetworksDeleted', []))
-                self.after(0, self._settings_log, f"✅ Removed {count} networks")
+                self.after(0, lambda: logging.info(f"✅ Removed {count} networks"))
                 self.after(0, self.status_bar.config, {"text": f"✅ Removed {count} networks"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
         
         threading.Thread(target=prune, daemon=True).start()
 
@@ -2363,23 +2583,23 @@ class DockerMonitorApp(tk.Tk):
         if not confirm:
             return
         
-        self._settings_log("🧹 Pruning unused volumes...")
+        logging.info("🧹 Pruning unused volumes...")
         
         def prune():
             try:
                 result = client.volumes.prune()
                 count = len(result.get('VolumesDeleted', []))
-                self.after(0, self._settings_log, f"✅ Removed {count} volumes")
+                self.after(0, lambda: logging.info(f"✅ Removed {count} volumes"))
                 self.after(0, self.status_bar.config, {"text": f"✅ Removed {count} volumes"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
         
         threading.Thread(target=prune, daemon=True).start()
 
     def refresh_docker_info(self):
         """Refresh Docker system information."""
-        self._settings_log("🔄 Fetching Docker system info...")
+        logging.info("🔄 Fetching Docker system info...")
         self.status_bar.config(text="🔄 Loading Docker info...")
         
         def fetch_info():
@@ -2409,10 +2629,10 @@ class DockerMonitorApp(tk.Tk):
                 info_text = "\n".join(output)
                 
                 self.after(0, self._update_docker_info_text, info_text)
-                self.after(0, self._settings_log, "✅ Info refreshed")
+                self.after(0, lambda: logging.info("✅ Info refreshed"))
                 self.after(0, self.status_bar.config, {"text": "✅ Docker info loaded"})
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
                 self.after(0, self.status_bar.config, {"text": f"❌ Error loading info"})
         
         threading.Thread(target=fetch_info, daemon=True).start()
@@ -2424,7 +2644,7 @@ class DockerMonitorApp(tk.Tk):
 
     def check_disk_usage(self):
         """Check Docker disk usage."""
-        self._settings_log("📊 Checking disk usage...")
+        logging.info("📊 Checking disk usage...")
         self.status_bar.config(text="📊 Checking disk usage...")
         
         def fetch_usage():
@@ -2466,10 +2686,10 @@ class DockerMonitorApp(tk.Tk):
                 usage_text = "\n".join(output)
                 
                 self.after(0, self._update_disk_usage_text, usage_text)
-                self.after(0, self._settings_log, "✅ Disk usage loaded")
+                self.after(0, lambda: logging.info("✅ Disk usage loaded"))
                 self.after(0, self.status_bar.config, {"text": "✅ Disk usage checked"})
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda: logging.error(f"❌ Error: {e}"))
                 self.after(0, self.status_bar.config, {"text": f"❌ Error checking disk usage"})
         
         threading.Thread(target=fetch_usage, daemon=True).start()
@@ -2488,7 +2708,7 @@ class DockerMonitorApp(tk.Tk):
         if not confirm:
             return
         
-        self._settings_log("⏹️  Stopping all containers...")
+        logging.info("⏹️  Stopping all containers...")
         self.status_bar.config(text="🔄 Stopping containers...")
         
         def stop_all():
@@ -2499,15 +2719,15 @@ class DockerMonitorApp(tk.Tk):
                     try:
                         container.stop(timeout=10)
                         stopped += 1
-                        self.after(0, self._settings_log, f"⏹️  Stopped: {container.name}")
+                        self.after(0, lambda name=container.name: logging.info(f"⏹️  Stopped: {name}"))
                     except Exception as e:
-                        self.after(0, self._settings_log, f"⚠️  Failed to stop {container.name}: {e}")
+                        self.after(0, lambda name=container.name, err=e: logging.warning(f"⚠️  Failed to stop {name}: {err}"))
                 
-                self.after(0, self._settings_log, f"✅ Stopped {stopped} containers")
+                self.after(0, lambda count=stopped: logging.info(f"✅ Stopped {count} containers"))
                 self.after(0, self.status_bar.config, {"text": f"✅ Stopped {stopped} containers"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda err=e: logging.error(f"❌ Error: {err}"))
                 self.after(0, self.status_bar.config, {"text": f"❌ Error: {e}"})
         
         threading.Thread(target=stop_all, daemon=True).start()
@@ -2521,7 +2741,7 @@ class DockerMonitorApp(tk.Tk):
         if not confirm:
             return
         
-        self._settings_log("🗑️  Removing stopped containers...")
+        logging.info("🗑️  Removing stopped containers...")
         self.status_bar.config(text="🔄 Removing containers...")
         
         def remove_all():
@@ -2532,15 +2752,15 @@ class DockerMonitorApp(tk.Tk):
                     try:
                         container.remove()
                         removed += 1
-                        self.after(0, self._settings_log, f"🗑️  Removed: {container.name}")
+                        self.after(0, lambda name=container.name: logging.info(f"🗑️  Removed: {name}"))
                     except Exception as e:
-                        self.after(0, self._settings_log, f"⚠️  Failed to remove {container.name}: {e}")
+                        self.after(0, lambda name=container.name, err=e: logging.warning(f"⚠️  Failed to remove {name}: {err}"))
                 
-                self.after(0, self._settings_log, f"✅ Removed {removed} containers")
+                self.after(0, lambda count=removed: logging.info(f"✅ Removed {count} containers"))
                 self.after(0, self.status_bar.config, {"text": f"✅ Removed {removed} containers"})
                 self.after(0, self.refresh_all_tabs)
             except Exception as e:
-                self.after(0, self._settings_log, f"❌ Error: {e}")
+                self.after(0, lambda err=e: logging.error(f"❌ Error: {err}"))
                 self.after(0, self.status_bar.config, {"text": f"❌ Error: {e}"})
         
         threading.Thread(target=remove_all, daemon=True).start()
@@ -2548,10 +2768,13 @@ class DockerMonitorApp(tk.Tk):
     def refresh_all_tabs(self):
         """Refresh all tabs."""
         try:
-            self.refresh_containers()
-            self.refresh_networks()
-            self.refresh_images()
-            self.refresh_volumes()
+            # Refresh containers
+            self.force_refresh_containers()
+            # Refresh networks
+            threading.Thread(target=self._fetch_networks_for_refresh, daemon=True).start()
+            # Refresh images and volumes directly
+            self.update_images_list()
+            self.update_volumes_list()
         except Exception as e:
             logging.error(f"Error refreshing tabs: {e}")
 
@@ -2574,45 +2797,55 @@ class DockerMonitorApp(tk.Tk):
         selected_items = self.tree.selection()
         if selected_items:
             item = self.tree.item(selected_items[0])
-            container_name = item['values'][1]
-            self.selected_container_label.config(text=container_name)
-            # Update info tab
+            short_id = item['values'][0]  # Already short ID from tree
+            container_name = item['values'][1]  # Keep name for operations
+            # Display short ID in label
+            self.selected_container_label.config(text=f"🆔 {short_id}")
+            # Update info tab using name (Docker API needs name)
             self.display_container_info(container_name)
         else:
             self.selected_container_label.config(text="None")
+            self._show_info_placeholder()
 
     def on_network_select(self, event):
         selected_items = self.network_tree.selection()
         if selected_items:
             item = self.network_tree.item(selected_items[0])
-            network_name = item['values'][1]
-            self.selected_container_label.config(text=f"net: {network_name}")
-            # Update info tab
+            network_id = item['values'][0]  # Short ID
+            network_name = item['values'][1]  # Name for operations
+            self.selected_container_label.config(text=f"🌐 {network_id}")
+            # Update info tab using name (Docker API needs name)
             self.display_network_info(network_name)
         else:
             self.selected_container_label.config(text="None")
+            self._show_info_placeholder()
 
     def on_image_select(self, event):
         selected = self.images_tree.selection()
         if selected:
             item = self.images_tree.item(selected[0])
-            image_info = item['values'][1]  # Repository:Tag
-            self.selected_container_label.config(text=f"img: {image_info}")
-            # Update info tab
-            self.display_image_info(item['values'][0])  # Pass image ID
+            image_id = item['values'][0]  # Short ID
+            # Update info tab using full image ID (stored as iid)
+            self.selected_container_label.config(text=f"🖼️ {image_id}")
+            # Pass the full image ID (iid) for operations
+            self.display_image_info(selected[0])
         else:
             self.selected_container_label.config(text="None")
+            self._show_info_placeholder()
 
     def on_volume_select(self, event):
         sel = self.volumes_tree.selection()
         if sel:
             item = self.volumes_tree.item(sel[0])
             volume_name = item['values'][0]
-            self.selected_container_label.config(text=f"vol: {volume_name}")
+            # For volumes, show truncated name if too long (max 20 chars)
+            display_name = volume_name[:20] + '...' if len(volume_name) > 20 else volume_name
+            self.selected_container_label.config(text=f"💾 {display_name}")
             # Update info tab
             self.display_volume_info(volume_name)
         else:
             self.selected_container_label.config(text="None")
+            self._show_info_placeholder()
 
     # --- Double-Click Handlers for Copying ID ---
     def on_container_double_click(self, event):
@@ -2672,6 +2905,9 @@ class DockerMonitorApp(tk.Tk):
     def display_container_info(self, container_name):
         """Display detailed information about a container in the Info tab."""
         try:
+            # Hide placeholder when showing info
+            self.info_placeholder_label.pack_forget()
+            
             with docker_lock:
                 container = client.containers.get(container_name)
                 info = container.attrs
@@ -2764,6 +3000,9 @@ class DockerMonitorApp(tk.Tk):
     def display_network_info(self, network_name):
         """Display detailed information about a network in the Info tab."""
         try:
+            # Hide placeholder when showing info
+            self.info_placeholder_label.pack_forget()
+            
             with docker_lock:
                 network = client.networks.get(network_name)
                 info = network.attrs
@@ -2830,6 +3069,9 @@ class DockerMonitorApp(tk.Tk):
     def display_image_info(self, image_id):
         """Display detailed information about an image in the Info tab."""
         try:
+            # Hide placeholder when showing info
+            self.info_placeholder_label.pack_forget()
+            
             with docker_lock:
                 image = client.images.get(image_id)
                 info = image.attrs
@@ -2903,6 +3145,9 @@ class DockerMonitorApp(tk.Tk):
     def display_volume_info(self, volume_name):
         """Display detailed information about a volume in the Info tab."""
         try:
+            # Hide placeholder when showing info
+            self.info_placeholder_label.pack_forget()
+            
             with docker_lock:
                 volume = client.volumes.get(volume_name)
                 info = volume.attrs
@@ -2981,6 +3226,13 @@ class DockerMonitorApp(tk.Tk):
         self.info_text.insert(tk.END, "⚠️ ERROR\n", 'title')
         self.info_text.insert(tk.END, f"\n{message}\n", 'warning')
         self.info_text.config(state='disabled')
+    
+    def _show_info_placeholder(self):
+        """Show placeholder message in info tab when nothing is selected."""
+        self.info_text.config(state='normal')
+        self.info_text.delete('1.0', tk.END)
+        self.info_text.config(state='disabled')
+        self.info_placeholder_label.pack(pady=20)
 
     def _update_volumes_from_list(self, vol_list):
         if not hasattr(self, 'vol_tags_configured'):
@@ -3070,19 +3322,21 @@ class DockerMonitorApp(tk.Tk):
             self.images_tree.tag_configure('evenrow', background=self.BG_COLOR)
             self.images_tags_configured = True
 
-        current_ids = {i['id'] for i in img_list}
+        # Use short IDs as unique identifiers (since we use short ID as iid)
+        current_short_ids = {i['id'][:12] for i in img_list}
         for child in list(self.images_tree.get_children()):
-            if self.images_tree.item(child)['values'][0] not in current_ids:
+            # child is the iid which we set to short ID
+            if child not in current_short_ids:
                 self.images_tree.delete(child)
 
         for img in img_list:
+            short_id = img['id'][:12]
             repo = ','.join(img.get('repo_tags') or [])
-            values = (img['id'][:12], repo, img.get('size', ''), img.get('created', ''))
-            iid = img['id'][:12]
-            if self.images_tree.exists(iid):
-                self.images_tree.item(iid, values=values)
+            values = (short_id, repo, img.get('size', ''), img.get('created', ''))
+            if self.images_tree.exists(short_id):
+                self.images_tree.item(short_id, values=values)
             else:
-                self.images_tree.insert('', tk.END, iid=iid, values=values)
+                self.images_tree.insert('', tk.END, iid=short_id, values=values)
 
         for i, iid in enumerate(self.images_tree.get_children()):
             self.images_tree.item(iid, tags=('evenrow' if i % 2 == 0 else 'oddrow',))
@@ -3240,6 +3494,19 @@ class DockerMonitorApp(tk.Tk):
             self.compose_actions_panel.pack_forget()
             self.info_actions_panel.pack_forget()
             self.help_actions_panel.pack_forget()
+            self.settings_actions_panel.pack_forget()
+        except Exception:
+            pass
+
+        # Determine if we should show the "Selected Item" section
+        # Only show for tabs that have selectable items (Containers, Network, Images, Volumes)
+        show_selected = any(x in tab_text for x in ['📦 Containers', '🌐 Network', '🖼️ Images', '💾 Volumes'])
+        
+        try:
+            if show_selected:
+                self.selected_section_frame.pack(pady=(10, 5), padx=10, fill=tk.X)
+            else:
+                self.selected_section_frame.pack_forget()
         except Exception:
             pass
 
@@ -3294,6 +3561,12 @@ class DockerMonitorApp(tk.Tk):
                 self.container_footer_panel.pack_forget()
             except Exception:
                 pass
+        elif '⚙️ Settings' in tab_text:
+            self.settings_actions_panel.pack(fill=tk.BOTH, expand=True)
+            try:
+                self.container_footer_panel.pack_forget()
+            except Exception:
+                pass
 
     def _update_network_from_list(self, net_list):
         if not hasattr(self, 'network_tree_tags_configured'):
@@ -3301,11 +3574,13 @@ class DockerMonitorApp(tk.Tk):
             self.network_tree.tag_configure('evenrow', background=self.BG_COLOR)
             self.network_tree_tags_configured = True
 
-        current_ids = {n['id'] for n in net_list}
+        # Use names as unique identifiers
+        current_names = {n['name'] for n in net_list}
         tree_items = self.network_tree.get_children()
 
         for child in tree_items:
-            if self.network_tree.item(child)['values'][0] not in current_ids:
+            # child is the iid which we set to network name
+            if child not in current_names:
                 self.network_tree.delete(child)
 
         for n in net_list:
@@ -3797,11 +4072,23 @@ class DockerMonitorApp(tk.Tk):
             self.status_bar.config(text="Ready | 🐳 Docker Monitor Manager")
 
     def prune_networks(self):
+        confirm = messagebox.askyesno(
+            '⚠️  Confirm Network Prune', 
+            'This will remove all unused networks!\n\n'
+            'Networks currently not connected to any containers will be deleted.\n'
+            'Built-in networks (bridge, host, none) will not be removed.\n\n'
+            'Continue?'
+        )
+        if not confirm:
+            return
+        
         try:
             client.networks.prune()
-            logging.info("Pruned unused networks.")
+            logging.info("✅ Pruned unused networks.")
+            messagebox.showinfo('Success', 'Unused networks pruned successfully!')
         except Exception as e:
             logging.error(f"Failed to prune networks: {e}")
+            messagebox.showerror('Error', f'Failed to prune networks: {e}')
 
     def run_container_action(self, action):
         """Runs an action (stop, pause, etc.) on the selected container."""
@@ -3958,15 +4245,19 @@ class DockerMonitorApp(tk.Tk):
             self.tree.tag_configure('evenrow', background=self.BG_COLOR)
             self.tree_tags_configured = True
 
-        current_ids = {item['id'] for item in stats_list}
+        # Use names as unique identifiers (since we use name as iid)
+        current_names = {item['name'] for item in stats_list}
         tree_items = self.tree.get_children()
 
         for child in tree_items:
-            if self.tree.item(child)['values'][0] not in current_ids:
+            # child is the iid which we set to container name
+            if child not in current_names:
                 self.tree.delete(child)
 
         for item in stats_list:
-            values = (item['id'], item['name'], item['status'], item['cpu'], item['ram'])
+            # Use short ID (first 12 chars) for display
+            short_id = item['id'][:12] if len(item['id']) > 12 else item['id']
+            values = (short_id, item['name'], item['status'], item['cpu'], item['ram'])
             if self.tree.exists(item['name']):
                 self.tree.item(item['name'], values=values)
             else:
