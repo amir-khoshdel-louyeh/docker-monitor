@@ -44,13 +44,16 @@ dmm = "docker_monitor.main:main"
 dmm-config = "docker_monitor.cli.config:main"
 dmm-doctor = "docker_monitor.cli.doctor:main"
 dmm-test = "docker_monitor.cli.test:main"
+dmm-uninstall = "docker_monitor.cli.uninstall:main"
+dmm-setup = "setup_tools.post_install:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "docker_monitor.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["docker_monitor*"]
+include = ["docker_monitor*", "setup_tools"]
 
 [tool.setuptools.package-data]
-docker_monitor = ["*.py", "assets/*.png", "*.desktop"]
+docker_monitor = ["*.py", "assets/*.png", "assets/*.svg", "*.desktop"]
+setup_tools = ["*.py", "*.desktop", "icons/*.png", "icons/*.svg", "icons/*.ico", "icons/*.icns"]

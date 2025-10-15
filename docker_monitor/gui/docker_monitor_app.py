@@ -14,6 +14,7 @@ import threading
 import queue
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 # Import custom modules
 from docker_monitor.utils.buffer_handler import log_buffer
@@ -45,14 +46,38 @@ from docker_monitor.utils.docker_utils import (
     delete_clones,
     docker_cleanup,
     scale_container,
-    monitor_thread
+    monitor_thread,
+    docker_events_listener
 )
 
 
 class DockerMonitorApp(tk.Tk):
     def __init__(self):
-        super().__init__()
-        self.title("Docker-Monitor-Manager")
+        # IMPORTANT: className must EXACTLY match StartupWMClass in .desktop file
+        # This is critical for window manager to show the correct icon in taskbar
+        super().__init__(className="docker-monitor-manager")
+        
+        # Set window title
+        self.title("Docker Monitor Manager")
+        
+        # Set window icon BEFORE showing the window
+        self._set_window_icon()
+        
+        # Additional window manager hints
+        try:
+            # Set WM_CLIENT_MACHINE for better window identification
+            import socket
+            hostname = socket.gethostname()
+            self.tk.call('wm', 'client', self._w, hostname)
+        except Exception as e:
+            logging.debug(f"Could not set WM_CLIENT: {e}")
+        
+        # Set window role for better window management
+        try:
+            self.tk.call('wm', 'group', self._w, self._w)
+        except Exception as e:
+            logging.debug(f"Could not set WM_GROUP: {e}")
+            logging.debug(f"Could not set WM_ROLE: {e}")
         
         # Get screen width and height
         screen_width = self.winfo_screenwidth()
@@ -166,6 +191,81 @@ class DockerMonitorApp(tk.Tk):
         
         # Update status bar with counts
         self.update_status_bar()
+
+    def _set_window_icon(self):
+        """Set window icon from installed icon files or package assets."""
+        import sys
+        import platform
+        
+        try:
+            # Try different icon paths in order of preference
+            icon_paths = []
+            
+            # Get the package directory
+            pkg_dir = Path(__file__).parent.parent
+            
+            if platform.system() == "Linux":
+                # 1. Try system-installed icons first (from ~/.local/share/icons)
+                home = Path.home()
+                for size in [64, 48, 128, 256]:
+                    icon_paths.append(home / f".local/share/icons/hicolor/{size}x{size}/apps/docker-monitor-manager.png")
+                
+                # 2. Try package assets (bundled with package)
+                for size in [64, 48, 128, 256, 512]:
+                    icon_paths.append(pkg_dir / f"assets/docker-monitor-manager-{size}x{size}.png")
+                icon_paths.append(pkg_dir / "assets/icon.png")
+                
+                # 3. Try setup_tools icons (during development)
+                icon_paths.append(pkg_dir.parent / "setup_tools/icons/docker-monitor-manager-64x64.png")
+                icon_paths.append(pkg_dir.parent / "setup_tools/icons/docker-monitor-manager-48x48.png")
+                
+            elif platform.system() == "Windows":
+                # Windows ICO file
+                home = Path.home()
+                icon_paths.append(home / ".icons/docker-monitor-manager.ico")
+                icon_paths.append(pkg_dir / "assets/docker-monitor-manager.ico")
+                icon_paths.append(pkg_dir.parent / "setup_tools/icons/docker-monitor-manager.ico")
+                
+            elif platform.system() == "Darwin":
+                # macOS - use PNG since Tkinter doesn't support ICNS directly
+                for size in [128, 64, 48]:
+                    icon_paths.append(pkg_dir / f"assets/docker-monitor-manager-{size}x{size}.png")
+                icon_paths.append(pkg_dir.parent / f"setup_tools/icons/docker-monitor-manager-{size}x{size}.png")
+            
+            # Try to load the first available icon
+            for icon_path in icon_paths:
+                if icon_path.exists():
+                    try:
+                        if platform.system() == "Windows" and icon_path.suffix == '.ico':
+                            # Use iconbitmap for Windows ICO files
+                            self.iconbitmap(str(icon_path))
+                        else:
+                            # Use PhotoImage for PNG files (Linux/macOS)
+                            try:
+                                # Try with PIL first (better quality)
+                                from PIL import Image, ImageTk
+                                img = Image.open(icon_path)
+                                photo = ImageTk.PhotoImage(img)
+                                self.iconphoto(True, photo)
+                                # Keep a reference to prevent garbage collection
+                                self._icon_photo = photo
+                            except ImportError:
+                                # Fallback to tkinter PhotoImage (no PIL)
+                                photo = tk.PhotoImage(file=str(icon_path))
+                                self.iconphoto(True, photo)
+                                # Keep a reference to prevent garbage collection
+                                self._icon_photo = photo
+                        
+                        logging.debug(f"Window icon set from: {icon_path}")
+                        return
+                    except Exception as e:
+                        logging.debug(f"Failed to load icon from {icon_path}: {e}")
+                        continue
+            
+            logging.warning("No window icon found, using default")
+            
+        except Exception as e:
+            logging.error(f"Error setting window icon: {e}")
 
     def _create_control_button(self, parent, text, bg_color, command, fg_color='white', width=15):
         """Wrapper for UIComponents.create_control_button for backward compatibility."""
@@ -2779,9 +2879,31 @@ class DockerMonitorApp(tk.Tk):
 
 def main():
     """Main entry point for the Docker-Monitor-Manager application."""
+    import platform
+    
+    # Check if desktop entry is installed (Linux only)
+    if platform.system() == "Linux":
+        desktop_file = Path.home() / ".local/share/applications/docker-monitor-manager.desktop"
+        if not desktop_file.exists():
+            print("\n" + "="*60)
+            print("⚠️  Desktop entry not installed!")
+            print("="*60)
+            print("To add Docker Monitor Manager to your application menu,")
+            print("please run:")
+            print("")
+            print("    dmm-setup")
+            print("")
+            print("Or manually run:")
+            print("    python3 setup_tools/post_install.py")
+            print("="*60 + "\n")
+    
     # Start the background monitoring thread
     monitor = threading.Thread(target=monitor_thread, daemon=True)
     monitor.start()
+    
+    # Start the Docker events listener thread for real-time updates
+    events_listener = threading.Thread(target=docker_events_listener, daemon=True)
+    events_listener.start()
 
     # Start the Tkinter GUI
     app = DockerMonitorApp()

@@ -2,4 +2,9 @@ include README.md
 include requirements.txt
 include LICENSE
 recursive-include docker_monitor *.py
+recursive-include docker_monitor/assets *.png *.svg *.ico *.icns
 include setup_tools/docker-monitor-manager.desktop
+include setup_tools/uninstall.py
+include setup_tools/post_install.py
+include setup_tools/pre_uninstall.py
+recursive-include setup_tools/icons *.png *.svg *.ico *.icns

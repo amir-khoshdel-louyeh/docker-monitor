@@ -2,12 +2,16 @@
 Version=1.0
 Type=Application
 Name=Docker Monitor Manager
+Name[fa]=مدیریت مانیتور داکر
 GenericName=Docker Container Manager
+GenericName[fa]=مدیریت کانتینرهای داکر
 Comment=A powerful desktop tool for monitoring and managing Docker containers
+Comment[fa]=ابزار قدرتمند دسکتاپ برای مانیتورینگ و مدیریت کانتینرهای داکر
 Exec=docker-monitor-manager
 Icon=docker-monitor-manager
 Terminal=false
 Categories=System;Monitor;Development;
-Keywords=docker;container;monitoring;management;
+Keywords=docker;container;monitoring;management;devops;
 StartupNotify=true
 StartupWMClass=docker-monitor-manager
+

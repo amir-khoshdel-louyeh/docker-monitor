@@ -35,14 +35,19 @@ class PostInstallCommand(install):
                 print("\n" + "="*60)
                 print("Running post-install script...")
                 print("="*60)
-                subprocess.run([sys.executable, script_path], check=False)
+                result = subprocess.run([sys.executable, script_path], check=False)
+                if result.returncode != 0:
+                    print(f"Warning: Post-install script returned code {result.returncode}")
+                    print(f"You can run it manually: python3 {script_path}")
             except Exception as e:
                 print(f"Note: Could not run post-install script: {e}")
-                print(f"You can run it manually: python {script_path}")
+                print(f"You can run it manually: python3 {script_path}")
+        else:
+            print(f"Warning: Post-install script not found at {script_path}")
 
 setup(
     name="docker-monitor-manager",
-    version="1.0.3",
+    version="1.0.9",
     
     # Package information
     description="A powerful desktop tool for monitoring and managing Docker containers",
@@ -74,6 +79,9 @@ setup(
             "dmm-config=docker_monitor.cli.config:main",
             "dmm-doctor=docker_monitor.cli.doctor:main",
             "dmm-test=docker_monitor.cli.test:main",
+            "dmm-setup=setup_tools.post_install:main",
+            "dmm-update=docker_monitor.cli.update:main",
+            "dmm-help=docker_monitor.cli.help:main",
         ],
     },
     

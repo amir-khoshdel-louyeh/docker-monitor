@@ -8,7 +8,7 @@ import threading
 CPU_LIMIT = 50.0  # %
 RAM_LIMIT = 5.0   # %
 CLONE_NUM = 2     # Max clones per container
-SLEEP_TIME = 4    # Polling interval in seconds
+SLEEP_TIME = 1    # Polling interval in seconds
 
 # --- Docker Client and Logic ---
 try:
@@ -88,10 +88,31 @@ def get_container_stats(container):
         }
 
 
+def is_clone_container(container):
+    """
+    Check if a container is a clone created by this application.
+    Uses labels to identify clone containers reliably.
+    """
+    try:
+        labels = container.labels or {}
+        return labels.get('dmm.is_clone') == 'true' and 'dmm.parent_container' in labels
+    except Exception:
+        return False
+
+
+def get_parent_container_name(container):
+    """Get the parent container name from a clone container."""
+    try:
+        labels = container.labels or {}
+        return labels.get('dmm.parent_container', '')
+    except Exception:
+        return ''
+
+
 def delete_clones(container, all_containers):
     """Delete all clone containers for a given container."""
-    base_name = container.name.split("_clone")[0]
-    existing_clones = [c for c in all_containers if c.name.startswith(base_name + "_clone")]
+    container_name = container.name
+    existing_clones = [c for c in all_containers if is_clone_container(c) and get_parent_container_name(c) == container_name]
     for clone in existing_clones:
         try:
             clone.stop()
@@ -114,7 +135,7 @@ def docker_cleanup():
 def scale_container(container, all_containers):
     """Scale a container by creating clones."""
     container_name = container.name
-    existing_clones = [c for c in all_containers if c.name.startswith(container_name + "_clone")]
+    existing_clones = [c for c in all_containers if is_clone_container(c) and get_parent_container_name(c) == container_name]
 
     if len(existing_clones) >= CLONE_NUM:
         logging.info(f"Max clones reached for '{container_name}'. Pausing original and deleting clones.")
@@ -131,7 +152,17 @@ def scale_container(container, all_containers):
     clone_name = f"{container_name}_clone{len(existing_clones) + 1}"
     try:
         temp_image = container.commit()
-        client.containers.run(image=temp_image.id, name=clone_name, detach=True)
+        # Create clone with labels to mark it as a clone and identify parent
+        client.containers.run(
+            image=temp_image.id,
+            name=clone_name,
+            detach=True,
+            labels={
+                'dmm.is_clone': 'true',
+                'dmm.parent_container': container_name,
+                'dmm.created_by': 'docker-monitor-manager'
+            }
+        )
         logging.info(f"Successfully created clone container '{clone_name}'.")
     except Exception as e:
         logging.error(f"Error creating clone container '{clone_name}': {e}")
@@ -159,7 +190,8 @@ def monitor_thread():
                         cpu_float = float(stats['cpu'])
                         ram_float = float(stats['ram'])
 
-                        if (cpu_float > CPU_LIMIT or ram_float > RAM_LIMIT) and "_clone" not in container.name:
+                        # Only scale if it's not a clone container (check using labels, not name)
+                        if (cpu_float > CPU_LIMIT or ram_float > RAM_LIMIT) and not is_clone_container(container):
                             logging.info(f"Container {container.name} overloaded (CPU: {cpu_float:.2f}%, RAM: {ram_float:.2f}%). Scaling...")
                             scale_container(container, all_containers)
                             
@@ -170,3 +202,49 @@ def monitor_thread():
                 logging.error(f"Error in monitor loop: {e}")
         
         time.sleep(SLEEP_TIME)
+
+
+def docker_events_listener():
+    """
+    Background thread that listens to Docker events in real-time.
+    Triggers immediate updates when containers are created, started, stopped, or removed.
+    """
+    logging.info("Docker events listener started")
+    
+    # Events we care about for immediate UI updates
+    relevant_events = ['create', 'start', 'stop', 'die', 'destroy', 'pause', 'unpause', 'kill', 'restart']
+    
+    try:
+        for event in client.events(decode=True):
+            try:
+                # Only process container events
+                if event.get('Type') == 'container' and event.get('Action') in relevant_events:
+                    event_action = event.get('Action')
+                    container_name = event.get('Actor', {}).get('Attributes', {}).get('name', 'unknown')
+                    
+                    logging.info(f"Docker event detected: {event_action} on container '{container_name}'")
+                    
+                    # Trigger an immediate refresh by fetching current stats
+                    with docker_lock:
+                        try:
+                            all_containers = client.containers.list(all=True)
+                            stats_list = []
+                            for container in all_containers:
+                                stats = get_container_stats(container)
+                                stats_list.append(stats)
+                            
+                            # Put the stats in the queue for immediate GUI update
+                            stats_queue.put(stats_list)
+                            
+                        except Exception as e:
+                            logging.error(f"Error processing event {event_action}: {e}")
+                            
+            except Exception as e:
+                logging.error(f"Error handling event: {e}")
+                
+    except Exception as e:
+        logging.error(f"Docker events listener error: {e}")
+        # Restart the listener after a short delay
+        time.sleep(5)
+        logging.info("Restarting Docker events listener...")
+        docker_events_listener()
