@@ -41,7 +41,9 @@ Issues = "https://github.com/amir-khoshdel-louyeh/docker-monitor-manager/issues"
 [project.scripts]
 docker-monitor-manager = "docker_monitor.main:main"
 dmm = "docker_monitor.main:main"
-dmm-config = "docker_monitor.config_cli:main"
+dmm-config = "docker_monitor.cli.config:main"
+dmm-doctor = "docker_monitor.cli.doctor:main"
+dmm-test = "docker_monitor.cli.test:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "docker_monitor.__version__"}
@@ -51,4 +53,4 @@ where = ["."]
 include = ["docker_monitor*"]
 
 [tool.setuptools.package-data]
-docker_monitor = ["*.py", "logo.png"]
+docker_monitor = ["*.py", "assets/*.png", "*.desktop"]

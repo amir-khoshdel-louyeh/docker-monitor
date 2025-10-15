@@ -2,11 +2,12 @@
 
 A small, native desktop tool for monitoring and managing Docker containers, written in Python with Tkinter.
 
-This repository provides a GUI application and a small system helper for common Docker-related issues. It exposes the following console entry points when installed:
+This repository provides a GUI application and helpful CLI tools for Docker management. It exposes the following console entry points when installed:
 
-- `docker-monitor-manager` (desktop GUI)
-- `dmm` (short alias for the GUI)
-- `dmm-config` (system configuration helper)
+- `docker-monitor-manager` / `dmm` - Desktop GUI application
+- `dmm-config` - System configuration helper
+- `dmm-doctor` - Health checker and auto-fixer
+- `dmm-test` - Test environment creator
 
 ---
 
@@ -87,14 +88,108 @@ docker-monitor-manager
 dmm
 ```
 
-To run the system helper that checks Docker/AppArmor and can optionally perform conservative fixes:
+### CLI Tools
+
+#### 🏥 Check system health and auto-fix issues:
+
+```bash
+dmm-doctor         # diagnose issues
+dmm-doctor --fix   # diagnose and auto-fix
+```
+
+#### ⚙️ Configure Docker installation:
 
 ```bash
 dmm-config         # interactive (prompts before making changes)
 dmm-config --yes   # non-interactive (accept prompts)
 ```
 
-`dmm-config` is conservative by default and will not modify your system without confirmation unless `--yes` is provided.
+#### 🧪 Create test environment:
+
+```bash
+dmm-test           # create test containers
+dmm-test --status  # check status
+dmm-test --cleanup # remove test containers
+```
+
+For detailed CLI documentation, see [CLI Tools Guide](docs/CLI_TOOLS.md) or [راهنمای ابزارهای خط فرمان](docs/CLI_TOOLS_FA.md).
+
+---
+
+## Quick Start
+
+First-time setup:
+
+```bash
+# 1. Configure Docker
+dmm-config
+
+# 2. Check system health
+dmm-doctor --fix
+
+# 3. Create test environment
+dmm-test
+
+# 4. Launch the application
+dmm
+```
+
+---
+
+## CLI Tools Overview
+
+### 🏥 `dmm-doctor`
+Health checker and auto-fixer for common Docker issues.
+
+**Checks**:
+- ✓ Docker installation
+- ✓ Docker service status  
+- ✓ Docker daemon connectivity
+- ✓ User permissions
+- ✓ Docker socket accessibility
+- ✓ Network connectivity
+- ✓ System resources
+
+**Usage**:
+```bash
+dmm-doctor         # diagnose only
+dmm-doctor --fix   # auto-fix issues
+```
+
+### 🧪 `dmm-test`
+Create test Docker containers for verifying the application works correctly.
+
+**Creates**:
+- Normal containers (nginx, redis, postgres)
+- CPU stress containers (for testing resource monitoring)
+- Memory stress containers (for testing memory limits)
+- Cloneable containers (for testing clone functionality)
+- Stopped containers (for testing restart)
+
+**Usage**:
+```bash
+dmm-test           # create all test containers
+dmm-test --cpu     # create only CPU stress
+dmm-test --memory  # create only memory stress
+dmm-test --status  # show container status
+dmm-test --cleanup # remove all test containers
+```
+
+### ⚙️ `dmm-config`
+Interactive system configuration helper.
+
+**Features**:
+- Detects and installs Docker
+- Configures AppArmor/SELinux
+- Sets up proper permissions
+
+**Usage**:
+```bash
+dmm-config         # interactive mode
+dmm-config --yes   # auto-accept all prompts
+```
+
+For detailed documentation, see [CLI Tools Guide](docs/CLI_TOOLS.md).
 
 ---
 

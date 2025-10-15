@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Docker Monitor Manager
+GenericName=Docker Container Manager
+Comment=A powerful desktop tool for monitoring and managing Docker containers
+Exec=docker-monitor-manager
+Icon=docker-monitor-manager
+Terminal=false
+Categories=System;Monitor;Development;
+Keywords=docker;container;monitoring;management;
+StartupNotify=true
+StartupWMClass=docker-monitor-manager

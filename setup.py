@@ -4,7 +4,10 @@ Docker Monitor - A powerful desktop tool for monitoring and managing Docker cont
 """
 
 from setuptools import setup, find_packages
+from setuptools.command.install import install
 import os
+import subprocess
+import sys
 
 # Read the contents of README file
 def read_readme():
@@ -20,6 +23,22 @@ def read_requirements():
         with open(requirements_path, encoding='utf-8') as f:
             return [line.strip() for line in f if line.strip() and not line.startswith('#')]
     return ['docker']
+
+class PostInstallCommand(install):
+    """Post-installation for installation mode."""
+    def run(self):
+        install.run(self)
+        # Run the post-install script to install .desktop file and icon
+        script_path = os.path.join(os.path.dirname(__file__), 'scripts', 'post_install.py')
+        if os.path.exists(script_path):
+            try:
+                print("\n" + "="*60)
+                print("Running post-install script...")
+                print("="*60)
+                subprocess.run([sys.executable, script_path], check=False)
+            except Exception as e:
+                print(f"Note: Could not run post-install script: {e}")
+                print(f"You can run it manually: python {script_path}")
 
 setup(
     name="docker-monitor-manager",
@@ -52,8 +71,15 @@ setup(
         "console_scripts": [
             "docker-monitor-manager=docker_monitor.main:main",
             "dmm=docker_monitor.main:main",
-            "dmm-config=docker_monitor.config_cli:main",
+            "dmm-config=docker_monitor.cli.config:main",
+            "dmm-doctor=docker_monitor.cli.doctor:main",
+            "dmm-test=docker_monitor.cli.test:main",
         ],
+    },
+    
+    # Custom install command
+    cmdclass={
+        'install': PostInstallCommand,
     },
     
     # Classifiers help users find your project
