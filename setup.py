@@ -47,7 +47,7 @@ class PostInstallCommand(install):
 
 setup(
     name="docker-monitor-manager",
-    version="1.0.9",
+    version="1.1.1",
     
     # Package information
     description="A powerful desktop tool for monitoring and managing Docker containers",
