@@ -189,8 +189,5 @@ Thumbs.db
 .pypirc
 .pypirc.lock
 
-# Ignore repo-root logo (often added for packaging/testing but not intended to be committed)
-/logo.png
-
 # Ensure local editable installs / virtualenv contents are ignored explicitly
 /.venv/

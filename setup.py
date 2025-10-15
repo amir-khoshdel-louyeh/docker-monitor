@@ -29,7 +29,7 @@ class PostInstallCommand(install):
     def run(self):
         install.run(self)
         # Run the post-install script to install .desktop file and icon
-        script_path = os.path.join(os.path.dirname(__file__), 'scripts', 'post_install.py')
+        script_path = os.path.join(os.path.dirname(__file__), 'setup_tools', 'post_install.py')
         if os.path.exists(script_path):
             try:
                 print("\n" + "="*60)

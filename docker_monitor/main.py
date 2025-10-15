@@ -4,8 +4,8 @@ Main entry point for the application.
 """
 
 import logging
-from docker_monitor.buffer_handler import BufferHandler
-from docker_monitor.docker_monitor_app import DockerMonitorApp, main
+from docker_monitor.utils.buffer_handler import BufferHandler
+from docker_monitor.gui.docker_monitor_app import DockerMonitorApp, main
 
 # Setup logging with buffer handler
 buffer_handler = BufferHandler()

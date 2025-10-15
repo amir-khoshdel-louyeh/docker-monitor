@@ -33,8 +33,11 @@ def install_linux():
     applications_dir.mkdir(parents=True, exist_ok=True)
     icons_dir.mkdir(parents=True, exist_ok=True)
     
+    # Get the setup_tools directory (where this script and desktop file are)
+    setup_tools_dir = Path(__file__).parent
+    desktop_file = setup_tools_dir / "docker-monitor-manager.desktop"
+    
     # Copy desktop file
-    desktop_file = package_path / "docker-monitor-manager.desktop"
     if desktop_file.exists():
         dest = applications_dir / "docker-monitor-manager.desktop"
         shutil.copy2(desktop_file, dest)
@@ -42,15 +45,6 @@ def install_linux():
         print(f"✓ Desktop entry installed to {dest}")
     else:
         print(f"Warning: Desktop file not found at {desktop_file}")
-    
-    # Copy icon
-    icon_file = package_path / "assets" / "logo.png"
-    if icon_file.exists():
-        dest = icons_dir / "docker-monitor-manager.png"
-        shutil.copy2(icon_file, dest)
-        print(f"✓ Icon installed to {dest}")
-    else:
-        print(f"Warning: Icon file not found at {icon_file}")
     
     # Update desktop database
     try:
@@ -109,19 +103,6 @@ def install_windows():
             shortcut = shell.CreateShortCut(str(shortcut_path))
             shortcut.Targetpath = script_path
             shortcut.WorkingDirectory = str(Path.home())
-            
-            # Set icon if available
-            icon_file = package_path / "assets" / "logo.png"
-            if icon_file.exists():
-                # Convert PNG to ICO if possible
-                try:
-                    from PIL import Image
-                    ico_path = package_path / "assets" / "logo.ico"
-                    img = Image.open(icon_file)
-                    img.save(ico_path, format='ICO')
-                    shortcut.IconLocation = str(ico_path)
-                except Exception:
-                    pass
             
             shortcut.save()
             print(f"✓ Start Menu shortcut created at {shortcut_path}")

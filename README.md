@@ -223,10 +223,6 @@ sudo aa-disable /etc/apparmor.d/docker
 	- Add your user to the `docker` group and re-login: `sudo usermod -aG docker $USER` then logout/login or `newgrp docker`.
 	- If AppArmor is interfering, use `dmm-config` to inspect and optionally change the Docker AppArmor profile.
 
-- GUI icon missing or low quality:
-	- Make sure Pillow is installed: `pip install Pillow`
-	- Replace `docker_monitor/logo.png` with a high-resolution square PNG (512×512 or 1024×1024) and restart.
-
 ---
 
 ## Developer / Maintainer notes
