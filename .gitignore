@@ -187,6 +187,7 @@ Thumbs.db
 
 # Personal packaging credentials (avoid committing)
 .pypirc
+.pypirc.new
 .pypirc.lock
 
 # Ensure local editable installs / virtualenv contents are ignored explicitly

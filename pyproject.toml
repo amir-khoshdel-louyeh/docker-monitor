@@ -46,6 +46,8 @@ dmm-doctor = "docker_monitor.cli.doctor:main"
 dmm-test = "docker_monitor.cli.test:main"
 dmm-uninstall = "docker_monitor.cli.uninstall:main"
 dmm-setup = "setup_tools.post_install:main"
+dmm-update = "docker_monitor.cli.update:main"
+dmm-help = "docker_monitor.cli.help:main"
 
 [tool.setuptools.dynamic]
 version = {attr = "docker_monitor.__version__"}
