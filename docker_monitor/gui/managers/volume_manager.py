@@ -129,7 +129,8 @@ class VolumeManager:
             except Exception as e:
                 status_bar.after(0, lambda: logging.error(f"❌ Error: {e}"))
         
-        threading.Thread(target=prune, daemon=True).start()
+            from docker_monitor.utils.worker import run_in_thread
+            run_in_thread(prune, on_done=None, on_error=lambda e: status_bar.after(0, lambda: logging.error(f"Prune failed: {e}")), tk_root=None, block=True)
     
     @staticmethod
     def show_volume_inspect_modal(parent, name):
@@ -189,74 +190,86 @@ class VolumeManager:
     @staticmethod
     def display_volume_info(info_text, volume_name, info_placeholder_label):
         """Display detailed information about a volume in the Info tab."""
+        # Hide placeholder immediately
         try:
-            # Hide placeholder when showing info
             info_placeholder_label.pack_forget()
-            
+        except Exception:
+            pass
+
+        from docker_monitor.utils.worker import run_in_thread
+
+        def _fetch():
             with docker_lock:
                 volume = client.volumes.get(volume_name)
-                info = volume.attrs
-            
-            info_text.config(state='normal')
-            info_text.delete('1.0', tk.END)
-            
-            # Title
-            info_text.insert(tk.END, f"Volume: {volume_name}\n", 'title')
-            info_text.insert(tk.END, "=" * 80 + "\n\n")
-            
-            # Basic Info
-            info_text.insert(tk.END, "💾 BASIC INFORMATION\n", 'section')
-            VolumeManager._add_info_line(info_text, "Name", info.get('Name', 'N/A'))
-            VolumeManager._add_info_line(info_text, "Driver", info.get('Driver', 'N/A'))
-            VolumeManager._add_info_line(info_text, "Mountpoint", info.get('Mountpoint', 'N/A'))
-            VolumeManager._add_info_line(info_text, "Created", info.get('CreatedAt', 'N/A'))
-            VolumeManager._add_info_line(info_text, "Scope", info.get('Scope', 'N/A'))
-            info_text.insert(tk.END, "\n")
-            
-            # Labels
-            info_text.insert(tk.END, "🏷️ LABELS\n", 'section')
-            labels = info.get('Labels', {})
-            if labels:
-                for key, value in labels.items():
-                    VolumeManager._add_info_line(info_text, key, value)
-            else:
-                info_text.insert(tk.END, "  No labels\n")
-            info_text.insert(tk.END, "\n")
-            
-            # Options
-            info_text.insert(tk.END, "🔧 OPTIONS\n", 'section')
-            options = info.get('Options', {})
-            if options:
-                for key, value in options.items():
-                    VolumeManager._add_info_line(info_text, key, str(value))
-            else:
-                info_text.insert(tk.END, "  No options\n")
-            info_text.insert(tk.END, "\n")
-            
-            # Containers using this volume
-            info_text.insert(tk.END, "📦 CONTAINERS USING THIS VOLUME\n", 'section')
-            with docker_lock:
-                containers = client.containers.list(all=True)
-            using_containers = []
-            for container in containers:
-                mounts = container.attrs.get('Mounts', [])
-                for mount in mounts:
-                    if mount.get('Type') == 'volume' and mount.get('Name') == volume_name:
-                        using_containers.append({
-                            'name': container.name,
-                            'destination': mount.get('Destination', 'N/A')
-                        })
-            
-            if using_containers:
-                for c in using_containers:
-                    VolumeManager._add_info_line(info_text, c['name'], f"mounted at {c['destination']}")
-            else:
-                info_text.insert(tk.END, "  No containers using this volume\n")
-            
-            info_text.config(state='disabled')
-            
-        except Exception as e:
-            VolumeManager._show_info_error(info_text, f"Error fetching volume info: {str(e)}")
+                return volume.attrs
+
+        def _render_info(info):
+            try:
+                info_text.config(state='normal')
+                info_text.delete('1.0', tk.END)
+
+                # Title
+                info_text.insert(tk.END, f"Volume: {volume_name}\n", 'title')
+                info_text.insert(tk.END, "=" * 80 + "\n\n")
+
+                # Basic Info
+                info_text.insert(tk.END, "BASIC INFORMATION\n", 'section')
+                VolumeManager._add_info_line(info_text, "Name", info.get('Name', 'N/A'))
+                VolumeManager._add_info_line(info_text, "Driver", info.get('Driver', 'N/A'))
+                VolumeManager._add_info_line(info_text, "Mountpoint", info.get('Mountpoint', 'N/A'))
+                VolumeManager._add_info_line(info_text, "Created", info.get('CreatedAt', 'N/A'))
+                VolumeManager._add_info_line(info_text, "Scope", info.get('Scope', 'N/A'))
+                info_text.insert(tk.END, "\n")
+
+                # Labels
+                info_text.insert(tk.END, "LABELS\n", 'section')
+                labels = info.get('Labels', {})
+                if labels:
+                    for key, value in labels.items():
+                        VolumeManager._add_info_line(info_text, key, value)
+                else:
+                    info_text.insert(tk.END, "  No labels\n")
+                info_text.insert(tk.END, "\n")
+
+                # Options
+                info_text.insert(tk.END, "OPTIONS\n", 'section')
+                options = info.get('Options', {})
+                if options:
+                    for key, value in options.items():
+                        VolumeManager._add_info_line(info_text, key, str(value))
+                else:
+                    info_text.insert(tk.END, "  No options\n")
+                info_text.insert(tk.END, "\n")
+
+                # Containers using this volume
+                info_text.insert(tk.END, "CONTAINERS USING THIS VOLUME\n", 'section')
+                with docker_lock:
+                    containers = client.containers.list(all=True)
+                using_containers = []
+                for container in containers:
+                    mounts = container.attrs.get('Mounts', [])
+                    for mount in mounts:
+                        if mount.get('Type') == 'volume' and mount.get('Name') == volume_name:
+                            using_containers.append({
+                                'name': container.name,
+                                'destination': mount.get('Destination', 'N/A')
+                            })
+
+                if using_containers:
+                    for c in using_containers:
+                        VolumeManager._add_info_line(info_text, c['name'], f"mounted at {c['destination']}")
+                else:
+                    info_text.insert(tk.END, "  No containers using this volume\n")
+
+                info_text.config(state='disabled')
+            except Exception as e:
+                VolumeManager._show_info_error(info_text, f"Error rendering volume info: {str(e)}")
+
+        def _on_error(e):
+            logging.error(f"Error fetching volume info: {e}")
+            info_text.after(0, lambda: VolumeManager._show_info_error(info_text, f"Error fetching volume info: {str(e)}"))
+
+        run_in_thread(_fetch, on_done=lambda info: _render_info(info), on_error=_on_error, tk_root=info_text)
     
     @staticmethod
     def _add_info_line(info_text, key, value):

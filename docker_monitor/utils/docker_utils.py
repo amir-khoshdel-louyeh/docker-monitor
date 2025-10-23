@@ -9,6 +9,16 @@ CPU_LIMIT = 50.0  # %
 RAM_LIMIT = 5.0   # %
 CLONE_NUM = 2     # Max clones per container
 SLEEP_TIME = 1    # Polling interval in seconds
+# Feature flags / policies
+# By default disable automatic scaling to avoid unexpected container creation
+# unless explicitly enabled by the user in settings/UI.
+AUTO_SCALE_ENABLED = True
+
+# Only react to events for containers that the app created (label) or that
+# match this name prefix. This prevents the GUI from chasing external
+# test harness containers unless you opt in.
+APP_CONTAINER_NAME_PREFIX = 'dmm-'
+APP_CREATED_BY_LABEL = 'docker-monitor-manager'
 
 # --- Docker Client and Logic ---
 try:
@@ -18,6 +28,7 @@ try:
 except Exception as e:
     logging.error(f"Docker client failed to connect: {e}")
     exit(1)
+
 
 # Queues for inter-thread communication
 stats_queue = queue.Queue()
@@ -126,8 +137,30 @@ def docker_cleanup():
     """Cleanup Docker resources."""
     try:
         # Use the Docker SDK for a cleaner and more robust implementation
-        client.images.prune(filters={'dangling': True})  # Prune dangling images created by .commit()
-        client.volumes.prune()
+        # Prune stopped containers, dangling images, unused volumes and networks
+        try:
+            containers_result = client.containers.prune()
+            logging.info(f"Pruned containers: {containers_result.get('ContainersDeleted')}")
+        except Exception:
+            logging.debug("No stopped containers to prune or prune failed")
+
+        try:
+            images_result = client.images.prune(filters={'dangling': True})  # Prune dangling images
+            logging.info(f"Pruned images: {images_result.get('ImagesDeleted')}, reclaimed={images_result.get('SpaceReclaimed')}")
+        except Exception:
+            logging.debug("Image prune failed")
+
+        try:
+            volumes_result = client.volumes.prune()
+            logging.info(f"Pruned volumes: {volumes_result.get('VolumesDeleted')}")
+        except Exception:
+            logging.debug("Volume prune failed")
+
+        try:
+            networks_result = client.networks.prune()
+            logging.info(f"Pruned networks: {networks_result.get('NetworksDeleted')}")
+        except Exception:
+            logging.debug("Network prune failed")
     except Exception as e:
         logging.error(f"An error occurred during Docker cleanup: {e}")
 
@@ -145,30 +178,23 @@ def scale_container(container, all_containers):
         except Exception as e:
             logging.error(f"Failed to pause original container '{container_name}': {e}")
         delete_clones(container, all_containers)
-        # Run cleanup in a separate thread to avoid blocking
-        threading.Thread(target=docker_cleanup, daemon=True).start()
+        # Schedule cleanup via shared worker to avoid raw thread storms
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(docker_cleanup, on_done=None, on_error=lambda e: logging.error(f"Cleanup failed: {e}"), tk_root=None, block=False)
         return
 
     clone_name = f"{container_name}_clone{len(existing_clones) + 1}"
-    try:
-        temp_image = container.commit()
-        # Create clone with labels to mark it as a clone and identify parent
-        client.containers.run(
-            image=temp_image.id,
-            name=clone_name,
-            detach=True,
-            labels={
-                'dmm.is_clone': 'true',
-                'dmm.parent_container': container_name,
-                'dmm.created_by': 'docker-monitor-manager'
-            }
-        )
-        logging.info(f"Successfully created clone container '{clone_name}'.")
-    except Exception as e:
-        logging.error(f"Error creating clone container '{clone_name}': {e}")
-    
-    # Run cleanup in a separate thread to avoid blocking
-    threading.Thread(target=docker_cleanup, daemon=True).start()
+    # If auto-scaling is disabled, do not create clones automatically.
+    if not AUTO_SCALE_ENABLED:
+        logging.info(f"Auto-scaling is disabled; skipping clone creation for '{container_name}'")
+        return
+
+    # IMPORTANT: automatic clone creation was used for testing and has been
+    # removed to ensure we never start containers without explicit user
+    # consent. If you need cloning in the future, implement an explicit
+    # user-driven action in the UI and call a well-audited helper instead.
+    logging.info(f"Auto-clone creation disabled by policy; skipping clone for '{container_name}'.")
+    return
 
 
 def monitor_thread():
@@ -217,31 +243,71 @@ def docker_events_listener():
     try:
         for event in client.events(decode=True):
             try:
-                # Only process container events
-                if event.get('Type') == 'container' and event.get('Action') in relevant_events:
-                    event_action = event.get('Action')
-                    container_name = event.get('Actor', {}).get('Attributes', {}).get('name', 'unknown')
-                    
-                    logging.info(f"Docker event detected: {event_action} on container '{container_name}'")
-                    
-                    # Trigger an immediate refresh by fetching current stats
-                    with docker_lock:
-                        try:
-                            all_containers = client.containers.list(all=True)
-                            stats_list = []
-                            for container in all_containers:
+                # Only process container events and only the actions we care about
+                if event.get('Type') != 'container' or event.get('Action') not in relevant_events:
+                    continue
+
+                event_action = event.get('Action')
+                attrs = event.get('Actor', {}).get('Attributes', {}) or {}
+                container_name = attrs.get('name', 'unknown')
+
+                # Determine whether this container was created by this app
+                created_by = attrs.get('dmm.created_by')
+                is_app_container = (created_by == APP_CREATED_BY_LABEL) or (
+                    isinstance(container_name, str) and container_name.startswith(APP_CONTAINER_NAME_PREFIX)
+                )
+
+                if not is_app_container:
+                    # External containers: keep noise at DEBUG level and ignore their
+                    # events to avoid triggering immediate GUI updates or destructive
+                    # reactions.
+                    logging.debug(f"External Docker event ignored: {event_action} on '{container_name}'")
+                    continue
+
+                logging.info(f"Docker event detected: {event_action} on container '{container_name}'")
+
+                # For some rapid create/start/destroy sequences the SDK may return
+                # a NotFound when trying to inspect a container that already went
+                # away. To reduce noisy 404 logs and avoid transient race errors,
+                # sleep a tiny amount for create/start events before listing.
+                if event_action in ('create', 'start'):
+                    # short debounce to let the container settle
+                    time.sleep(0.05)
+
+                # Trigger an immediate refresh by fetching current stats for app containers only
+                with docker_lock:
+                    try:
+                        all_containers = client.containers.list(all=True)
+                        stats_list = []
+                        for container in all_containers:
+                            try:
                                 stats = get_container_stats(container)
                                 stats_list.append(stats)
-                            
-                            # Put the stats in the queue for immediate GUI update
-                            stats_queue.put(stats_list)
-                            
-                        except Exception as e:
-                            logging.error(f"Error processing event {event_action}: {e}")
-                            
+                            except docker.errors.NotFound:
+                                # Container disappeared between list and inspect - expected
+                                logging.debug(f"Container disappeared before stats could be read: {container.name}")
+                            except Exception as e:
+                                logging.error(f"Error getting stats for {getattr(container, 'name', container.short_id)}: {e}")
+
+                        # Put the stats in the queue for immediate GUI update
+                        stats_queue.put(stats_list)
+
+                        # If the container was destroyed, schedule cleanup to free resources
+                        if event_action == 'destroy':
+                            from docker_monitor.utils.worker import run_in_thread
+                            run_in_thread(docker_cleanup, on_done=None, on_error=lambda e: logging.error(f"Cleanup failed: {e}"), tk_root=None, block=False)
+
+                    except docker.errors.NotFound as e:
+                        # This can happen if a specific container referenced in the
+                        # SDK query was removed concurrently. Treat as debug-worthy
+                        # rather than an error to avoid alarming logs for races.
+                        logging.debug(f"NotFound while processing event {event_action}: {e}")
+                    except Exception as e:
+                        logging.error(f"Error processing event {event_action}: {e}")
+
             except Exception as e:
                 logging.error(f"Error handling event: {e}")
-                
+
     except Exception as e:
         logging.error(f"Docker events listener error: {e}")
         # Restart the listener after a short delay

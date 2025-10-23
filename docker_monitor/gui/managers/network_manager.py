@@ -4,6 +4,12 @@ Handles all network-related operations including listing, creation, removal, and
 """
 
 import logging
+"""
+Network Manager Module
+Handles all network-related operations including listing, creation, removal, and container connections.
+"""
+
+import logging
 import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog
@@ -182,7 +188,8 @@ class NetworkManager:
                 if status_callback:
                     status_callback("❌ Error pruning networks")
         
-        threading.Thread(target=prune, daemon=True).start()
+            from docker_monitor.utils.worker import run_in_thread
+            run_in_thread(prune, on_done=None, on_error=lambda e: logging.error(f"Prune failed: {e}"), tk_root=None, block=True)
     
     @staticmethod
     def get_network_info(network_name):

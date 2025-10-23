@@ -276,8 +276,8 @@ class DockerTerminal(tk.Frame):
             return "break"
 
         # Run command in a separate thread to avoid blocking the GUI
-        thread = threading.Thread(target=self._execute_command, args=(command_parts,), daemon=True)
-        thread.start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(lambda: self._execute_command(command_parts), on_done=None, on_error=lambda e: logging.error(f"Terminal command failed: {e}"), tk_root=None, block=False)
 
         # Start polling for output if not already doing so
         if not self.is_polling:

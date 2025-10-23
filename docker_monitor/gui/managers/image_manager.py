@@ -136,14 +136,29 @@ class ImageManager:
             repo: Repository name (e.g., 'nginx:latest')
             success_callback: Function to call on success
         """
-        try:
-            with docker_lock:
-                client.images.pull(repo)
-            logging.info(f'Pulled image {repo}')
-            if success_callback:
-                success_callback()
-        except Exception as e:
-            logging.error(f'Failed to pull image {repo}: {e}')
+        # Use the process-backed worker to run heavy docker pulls in separate processes
+        from docker_monitor.utils.process_worker import run_docker_cmd_in_process
+
+        cmd = ['docker', 'pull', repo]
+
+        def _on_done(result):
+            rc = result.get('returncode', 255)
+            stderr_tail = result.get('stderr_tail', '')
+            if rc == 0:
+                logging.info(f'Pulled image {repo} (ok)')
+                if success_callback:
+                    try:
+                        success_callback()
+                    except Exception:
+                        logging.exception('success_callback failed')
+            else:
+                logging.error(f'Failed to pull image {repo}, rc={rc}: {stderr_tail.strip()}')
+
+        def _on_error(e):
+            logging.exception(f'Error running docker pull for {repo}: {e}')
+
+        # Schedule the docker pull in a separate process, marshal callbacks to the UI
+        run_docker_cmd_in_process(cmd, on_done=_on_done, on_error=_on_error, tk_root=None, block=False)
     
     @staticmethod
     def prune_images(confirm_callback, status_callback):
@@ -176,131 +191,125 @@ class ImageManager:
                 if status_callback:
                     status_callback("❌ Error pruning images")
         
-        threading.Thread(target=prune, daemon=True).start()
+            from docker_monitor.utils.worker import run_in_thread
+            run_in_thread(prune, on_done=None, on_error=lambda e: logging.error(f"Prune failed: {e}"), tk_root=None, block=True)
     
     @staticmethod
     def display_image_info(info_text, image_id, placeholder_label):
-        """Display detailed information about an image.
-        
-        Args:
-            info_text: ScrolledText widget to display info
-            image_id: ID of the image
-            placeholder_label: Placeholder label to hide
-        """
+        """Display detailed information about an image (fetches in background)."""
         try:
-            # Hide placeholder
             placeholder_label.pack_forget()
-            
+        except Exception:
+            pass
+
+        from docker_monitor.utils.worker import run_in_thread
+
+        def _fetch():
             with docker_lock:
                 image = client.images.get(image_id)
-                info = image.attrs
-            
-            # Clear existing content
-            info_text.config(state='normal')
-            info_text.delete('1.0', tk.END)
-            
-            # Title
-            tags = info.get('RepoTags', ['<none>'])
-            info_text.insert(tk.END, f"Image: {tags[0] if tags else '<none>'}\n", 'title')
-            info_text.insert(tk.END, "=" * 80 + "\n\n")
-            
-            # Basic Info
-            info_text.insert(tk.END, "🖼️ BASIC INFORMATION\n", 'section')
-            ImageManager._add_info_line(info_text, "ID", info.get('Id', 'N/A').replace('sha256:', '')[:12])
-            ImageManager._add_info_line(info_text, "Tags", ', '.join(info.get('RepoTags', ['<none>'])))
-            ImageManager._add_info_line(info_text, "Size", f"{info.get('Size', 0) / (1024**2):.2f} MB")
-            ImageManager._add_info_line(info_text, "Created", info.get('Created', 'N/A'))
-            ImageManager._add_info_line(info_text, "Architecture", info.get('Architecture', 'N/A'))
-            ImageManager._add_info_line(info_text, "OS", info.get('Os', 'N/A'))
-            info_text.insert(tk.END, "\n")
-            
-            # Container Config
-            info_text.insert(tk.END, "🔧 CONTAINER CONFIGURATION\n", 'section')
-            config = info.get('Config', {})
-            ImageManager._add_info_line(info_text, "User", config.get('User', 'root') or 'root')
-            ImageManager._add_info_line(info_text, "Working Dir", config.get('WorkingDir', '/') or '/')
-            
-            # Exposed Ports
-            exposed = config.get('ExposedPorts', {})
-            if exposed:
-                ImageManager._add_info_line(info_text, "Exposed Ports", ', '.join(exposed.keys()))
-            
-            # Entrypoint and CMD
-            entrypoint = config.get('Entrypoint', [])
-            if entrypoint:
-                ImageManager._add_info_line(info_text, "Entrypoint", ' '.join(entrypoint))
-            cmd = config.get('Cmd', [])
-            if cmd:
-                ImageManager._add_info_line(info_text, "Cmd", ' '.join(cmd))
-            info_text.insert(tk.END, "\n")
-            
-            # Environment
-            info_text.insert(tk.END, "🌍 ENVIRONMENT\n", 'section')
-            env = config.get('Env', [])
-            if env:
-                for e in env[:10]:
-                    info_text.insert(tk.END, f"  {e}\n")
-                if len(env) > 10:
-                    info_text.insert(tk.END, f"  ... and {len(env) - 10} more\n")
-            else:
-                info_text.insert(tk.END, "  No environment variables\n")
-            info_text.insert(tk.END, "\n")
-            
-            # Containers using this image
-            info_text.insert(tk.END, "📦 CONTAINERS USING THIS IMAGE\n", 'section')
-            with docker_lock:
-                containers = client.containers.list(all=True, filters={'ancestor': image_id})
-            if containers:
-                for container in containers:
-                    ImageManager._add_info_line(info_text, container.name, container.status)
-            else:
-                info_text.insert(tk.END, "  No containers using this image\n")
-            
-            # Configure tags
-            info_text.tag_config('title', foreground='#00ff88', font=('Segoe UI', 14, 'bold'))
-            info_text.tag_config('section', foreground='#00ADB5', font=('Segoe UI', 12, 'bold'))
-            info_text.tag_config('key', foreground='#FFD700', font=('Segoe UI', 10, 'bold'))
-            info_text.tag_config('value', foreground='#EEEEEE', font=('Segoe UI', 10))
-            
-            info_text.config(state='disabled')
-            
-        except Exception as e:
-            logging.error(f"Error displaying image info: {e}")
-            info_text.config(state='normal')
-            info_text.delete('1.0', tk.END)
-            info_text.insert(tk.END, f"Error loading image information:\n{str(e)}", 'error')
-            info_text.tag_config('error', foreground='#e74c3c', font=('Segoe UI', 11))
-            info_text.config(state='disabled')
-    
+                return image.attrs
+
+        def _render_info(info):
+            try:
+                info_text.config(state='normal')
+                info_text.delete('1.0', tk.END)
+
+                # Title
+                tags = info.get('RepoTags', ['<none>'])
+                info_text.insert(tk.END, f"Image: {tags[0] if tags else '<none>'}\n", 'title')
+                info_text.insert(tk.END, "=" * 80 + "\n\n")
+
+                # Basic Info
+                info_text.insert(tk.END, "BASIC INFORMATION\n", 'section')
+                ImageManager._add_info_line(info_text, "ID", info.get('Id', 'N/A').replace('sha256:', '')[:12])
+                ImageManager._add_info_line(info_text, "Tags", ', '.join(info.get('RepoTags', ['<none>'])))
+                ImageManager._add_info_line(info_text, "Size", f"{info.get('Size', 0) / (1024**2):.2f} MB")
+                ImageManager._add_info_line(info_text, "Created", info.get('Created', 'N/A'))
+                ImageManager._add_info_line(info_text, "Architecture", info.get('Architecture', 'N/A'))
+                ImageManager._add_info_line(info_text, "OS", info.get('Os', 'N/A'))
+                info_text.insert(tk.END, "\n")
+
+                # Container Config
+                info_text.insert(tk.END, "CONTAINER CONFIGURATION\n", 'section')
+                config = info.get('Config', {})
+                ImageManager._add_info_line(info_text, "User", config.get('User', 'root') or 'root')
+                ImageManager._add_info_line(info_text, "Working Dir", config.get('WorkingDir', '/') or '/')
+
+                # Exposed Ports
+                exposed = config.get('ExposedPorts', {})
+                if exposed:
+                    ImageManager._add_info_line(info_text, "Exposed Ports", ', '.join(exposed.keys()))
+
+                # Entrypoint and CMD
+                entrypoint = config.get('Entrypoint', [])
+                if entrypoint:
+                    ImageManager._add_info_line(info_text, "Entrypoint", ' '.join(entrypoint))
+                cmd = config.get('Cmd', [])
+                if cmd:
+                    ImageManager._add_info_line(info_text, "Cmd", ' '.join(cmd))
+                info_text.insert(tk.END, "\n")
+
+                # Environment
+                info_text.insert(tk.END, "ENVIRONMENT\n", 'section')
+                env = config.get('Env', [])
+                if env:
+                    for e in env[:10]:
+                        info_text.insert(tk.END, f"  {e}\n")
+                    if len(env) > 10:
+                        info_text.insert(tk.END, f"  ... and {len(env) - 10} more\n")
+                else:
+                    info_text.insert(tk.END, "  No environment variables\n")
+                info_text.insert(tk.END, "\n")
+
+                # Containers using this image
+                info_text.insert(tk.END, "CONTAINERS USING THIS IMAGE\n", 'section')
+                with docker_lock:
+                    containers = client.containers.list(all=True, filters={'ancestor': image_id})
+                if containers:
+                    for container in containers:
+                        ImageManager._add_info_line(info_text, container.name, container.status)
+                else:
+                    info_text.insert(tk.END, "  No containers using this image\n")
+
+                # Configure tags
+                info_text.tag_config('title', foreground='#00ff88', font=('Segoe UI', 14, 'bold'))
+                info_text.tag_config('section', foreground='#00ADB5', font=('Segoe UI', 12, 'bold'))
+                info_text.tag_config('key', foreground='#FFD700', font=('Segoe UI', 10, 'bold'))
+                info_text.tag_config('value', foreground='#EEEEEE', font=('Segoe UI', 10))
+
+                info_text.config(state='disabled')
+            except Exception as e:
+                logging.error(f"Error rendering image info: {e}")
+                ImageManager._show_error(info_text, f"Error rendering image information: {e}")
+
+        def _on_error(e):
+            logging.error(f"Error fetching image info: {e}")
+            info_text.after(0, lambda: ImageManager._show_error(info_text, f"Error loading image information: {e}"))
+
+        run_in_thread(_fetch, on_done=lambda info: _render_info(info), on_error=_on_error, tk_root=info_text)
+
+    @staticmethod
+    def _show_error(info_text, message):
+        info_text.config(state='normal')
+        info_text.delete('1.0', tk.END)
+        info_text.insert(tk.END, f"Error: {message}\n")
+        info_text.config(state='disabled')
+        
     @staticmethod
     def _add_info_line(info_text, key, value):
-        """Helper to add a key-value line to info text."""
-        info_text.insert(tk.END, f"{key}: ", 'key')
-        info_text.insert(tk.END, f"{value}\n", 'value')
-    
-    @staticmethod
-    def show_image_inspect_modal(parent, image_id):
-        """Show image inspect modal with JSON data.
-        
+        """Insert a single labeled info line into the info_text widget.
+
         Args:
-            parent: Parent window
-            image_id: ID of the image
+            info_text: scrolledtext widget to write into
+            key: label/key string
+            value: value string
         """
         try:
-            with docker_lock:
-                img = client.images.get(image_id)
-                attrs = img.attrs
-            
-            win = tk.Toplevel(parent)
-            win.title(f'Image: {image_id}')
-            win.geometry("800x600")
-            
-            txt = scrolledtext.ScrolledText(win, width=80, height=30, bg='#2a3a4a', fg='#ffffff')
-            txt.pack(fill=tk.BOTH, expand=True)
-            txt.insert(tk.END, json.dumps(attrs, indent=2))
-            txt.config(state='disabled')
+            info_text.insert(tk.END, f"  {key}: ")
+            info_text.insert(tk.END, f"{value}\n", 'value')
         except Exception as e:
-            logging.error(f'Error showing image inspect: {e}')
+            logging.debug(f"Failed to add info line {key}: {e}")
+        
     
     @staticmethod
     def copy_image_id_to_clipboard(tree, clipboard_clear, clipboard_append, update_func, copy_tooltip):

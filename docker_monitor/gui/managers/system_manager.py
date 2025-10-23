@@ -91,7 +91,8 @@ class SystemManager:
                 status_bar.after(0, lambda: logging.error(f"❌ Error: {e}"))
                 status_bar.after(0, status_bar.config, {"text": f"❌ Prune failed: {e}"})
         
-        threading.Thread(target=prune, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(prune, on_done=None, on_error=lambda e: logging.error(f"Prune failed: {e}"), tk_root=None, block=True)
     
     @staticmethod
     def show_system_info(parent):
@@ -172,7 +173,8 @@ class SystemManager:
                 status_bar.after(0, lambda: logging.error(f"❌ Error: {e}"))
                 status_bar.after(0, status_bar.config, {"text": f"❌ Error loading info"})
         
-        threading.Thread(target=fetch_info, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(fetch_info, on_done=None, on_error=lambda e: logging.error(f"Fetch info failed: {e}"), tk_root=None, block=False)
     
     @staticmethod
     def check_disk_usage(disk_usage_text, status_bar):
@@ -226,7 +228,8 @@ class SystemManager:
                 status_bar.after(0, lambda: logging.error(f"❌ Error: {e}"))
                 status_bar.after(0, status_bar.config, {"text": f"❌ Error checking disk usage"})
         
-        threading.Thread(target=fetch_usage, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(fetch_usage, on_done=None, on_error=lambda e: logging.error(f"Fetch usage failed: {e}"), tk_root=None, block=False)
     
     @staticmethod
     def _update_text_widget(text_widget, text):
@@ -448,4 +451,5 @@ class SystemManager:
                 status_bar.after(0, lambda: messagebox.showerror('Error', f'Failed to export report:\n{e}'))
                 status_bar.after(0, status_bar.config, {"text": "❌ Export failed"})
         
-        threading.Thread(target=generate_report, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(generate_report, on_done=None, on_error=lambda e: logging.error(f"Generate report failed: {e}"), tk_root=None, block=False)

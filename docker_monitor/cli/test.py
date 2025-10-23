@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-dmm-test: Create test Docker containers for testing docker-monitor-manager
+dmm-test: Minimal test container creator for docker-monitor-manager
 
-This tool creates various test containers to verify that the app works correctly:
-- Normal containers (nginx, redis, postgres)
-- CPU-intensive containers (stress test)
-- Memory-intensive containers (memory hog)
-- Containers that can be cloned
-- Stopped containers
-- Containers with various states
+This script creates three simple test containers used by the project:
+- dmm-test-nginx
+- dmm-test-redis
+- dmm-test-postgres
+
+It supports --cleanup to remove test containers and --status to list them.
 """
 from __future__ import annotations
 
@@ -45,25 +44,20 @@ def run_docker(args: List[str], capture: bool = True) -> subprocess.CompletedPro
 
 
 def print_header(text: str):
-    """Print section header"""
-    print(f"\n{Colors.BOLD}{Colors.BLUE}{'='*60}{Colors.ENDC}")
-    print(f"{Colors.BOLD}{Colors.BLUE}{text}{Colors.ENDC}")
-    print(f"{Colors.BOLD}{Colors.BLUE}{'='*60}{Colors.ENDC}\n")
+    print(f"\n{text}\n{'-'*len(text)}")
 
 
 def print_status(name: str, status: str, extra: str = ""):
-    """Print container creation status"""
-    icon = f"{Colors.GREEN}✓{Colors.ENDC}" if status == "created" else f"{Colors.YELLOW}⚠{Colors.ENDC}"
-    print(f"{icon} {name}: {status}")
+    print(f"{name}: {status}")
     if extra:
-        print(f"  {Colors.CYAN}→{Colors.ENDC} {extra}")
+        print(f"  -> {extra}")
 
 
 def cleanup_existing_test_containers():
     """Remove existing test containers"""
     print_header("Cleaning up existing test containers")
     
-    test_prefixes = ['dmm-test-', 'test-nginx', 'cpu-stress', 'mem-stress']
+    test_prefixes = ['dmm-test-', 'test-nginx']
     
     # Get all containers (including stopped)
     result = run_docker(['ps', '-a', '--format', '{{.Names}}'])
@@ -92,190 +86,51 @@ def cleanup_existing_test_containers():
 def create_normal_containers():
     """Create normal working containers"""
     print_header("Creating normal containers")
-    
+
     containers = [
-        ('dmm-test-nginx', 'nginx:alpine', 'Web server', ['-p', '8080:80']),
-        ('dmm-test-redis', 'redis:alpine', 'Redis cache', ['-p', '6379:6379']),
-        ('dmm-test-postgres', 'postgres:alpine', 'PostgreSQL database', 
-         ['-e', 'POSTGRES_PASSWORD=test123', '-p', '5432:5432']),
+        ('dmm-test-nginx', 'nginx:alpine', ['-p', '8080:80']),
+        ('dmm-test-redis', 'redis:alpine', ['-p', '6379:6379']),
+        ('dmm-test-postgres', 'postgres:alpine', ['-e', 'POSTGRES_PASSWORD=test123', '-p', '5432:5432']),
+        # Memory-hog test container: reserves ~40MiB on startup to trigger RAM overload detection
+        ('dmm-test-mem', 'python:3.11-slim', ['--memory=100m', '--label', 'dmm.created_by=docker-monitor-manager', '--', 'bash', '-c', "python -c 'b=bytearray(40*1024*1024); import time; time.sleep(3600)'"]),
     ]
-    
-    for name, image, desc, extra_args in containers:
-        # Pull image first
+
+    for name, image, extra_args in containers:
         print(f"Pulling image: {image}")
         run_docker(['pull', image], capture=False)
-        
-        # Create container
-        cmd_args = ['run', '-d', '--name', name] + extra_args + [image]
-        result = run_docker(cmd_args)
-        
-        if result.returncode == 0:
-            print_status(name, "created", desc)
+
+        # Build the docker run command. If extra_args contains a '--', treat the
+        # parts after '--' as the container command and ensure the image is
+        # placed before that command (docker run OPTIONS IMAGE COMMAND).
+        if '--' in extra_args:
+            idx = extra_args.index('--')
+            options = extra_args[:idx]
+            cmd = extra_args[idx+1:]
+            cmd_args = ['run', '-d', '--name', name] + options + [image] + cmd
         else:
-            print_status(name, "failed", result.stderr.strip())
+            cmd_args = ['run', '-d', '--name', name] + extra_args + [image]
+
+        result = run_docker(cmd_args)
+
+        if result.returncode == 0:
+            print_status(name, 'created')
+        else:
+            print_status(name, 'failed', result.stderr.strip())
 
 
-def create_cpu_stress_container():
-    """Create a CPU-intensive container"""
-    print_header("Creating CPU stress container")
-    
-    name = 'dmm-test-cpu-stress'
-    
-    # Use alpine with a CPU stress loop
-    cpu_stress_cmd = "sh -c 'echo Starting CPU stress; i=0; while true; do i=$((i+1)); done'"
-    
-    result = run_docker([
-        'run', '-d',
-        '--name', name,
-        '--cpus', '0.5',  # Limit to 0.5 CPU to avoid system overload
-        'alpine',
-        'sh', '-c',
-        'echo "CPU Stress Test Started"; while true; do :; done'
-    ])
-    
-    if result.returncode == 0:
-        print_status(name, "created", "CPU-intensive workload (limited to 0.5 CPU)")
-    else:
-        print_status(name, "failed", result.stderr.strip())
 
-
-def create_memory_stress_container():
-    """Create a memory-intensive container"""
-    print_header("Creating memory stress container")
-    
-    name = 'dmm-test-mem-stress'
-    
-    # Use Python to allocate memory gradually
-    mem_script = '''
-import time
-import sys
-
-print("Memory stress test started")
-sys.stdout.flush()
-
-memory_hog = []
-iteration = 0
-
-while True:
-    try:
-        # Allocate 10MB per iteration
-        chunk = ' ' * (10 * 1024 * 1024)
-        memory_hog.append(chunk)
-        iteration += 1
-        
-        if iteration % 10 == 0:
-            print(f"Allocated ~{iteration * 10}MB")
-            sys.stdout.flush()
-        
-        time.sleep(1)
-    except MemoryError:
-        print("Memory limit reached")
-        sys.stdout.flush()
-        time.sleep(60)
-        break
-'''
-    
-    # Create container with memory limit
-    result = run_docker([
-        'run', '-d',
-        '--name', name,
-        '--memory', '256m',  # Limit to 256MB
-        '--memory-swap', '256m',  # No swap
-        'python:3.9-alpine',
-        'python', '-c', mem_script
-    ])
-    
-    if result.returncode == 0:
-        print_status(name, "created", "Memory-intensive workload (limited to 256MB)")
-    else:
-        print_status(name, "failed", result.stderr.strip())
-
-
-def create_cloneable_containers():
-    """Create containers that demonstrate cloning capability"""
-    print_header("Creating containers for clone testing")
-    
-    # Create a simple container that can be cloned
-    base_name = 'dmm-test-clone-base'
-    
-    # Pull alpine image
-    run_docker(['pull', 'alpine:latest'], capture=False)
-    
-    # Create base container
-    result = run_docker([
-        'run', '-d',
-        '--name', base_name,
-        'alpine',
-        'sh', '-c', 'echo "Clone Base Container"; sleep infinity'
-    ])
-    
-    if result.returncode == 0:
-        print_status(base_name, "created", "Base container for cloning")
-        
-        # Create a clone manually to demonstrate
-        clone_name = 'dmm-test-clone-1'
-        
-        # Commit the container to an image
-        commit_result = run_docker(['commit', base_name, 'dmm-clone-image'])
-        
-        if commit_result.returncode == 0:
-            # Create clone from the committed image
-            clone_result = run_docker([
-                'run', '-d',
-                '--name', clone_name,
-                'dmm-clone-image',
-                'sh', '-c', 'echo "Cloned Container"; sleep infinity'
-            ])
-            
-            if clone_result.returncode == 0:
-                print_status(clone_name, "created", "Cloned from base container")
-            else:
-                print_status(clone_name, "failed", clone_result.stderr.strip())
-    else:
-        print_status(base_name, "failed", result.stderr.strip())
-
-
-def create_stopped_container():
-    """Create a stopped container"""
-    print_header("Creating stopped container")
-    
-    name = 'dmm-test-stopped'
-    
-    # Create and immediately stop
-    result = run_docker([
-        'run', '-d',
-        '--name', name,
-        'alpine',
-        'echo', 'This container is stopped'
-    ])
-    
-    if result.returncode == 0:
-        time.sleep(1)  # Wait for container to stop naturally
-        print_status(name, "created", "Container is stopped (for restart testing)")
-    else:
-        print_status(name, "failed", result.stderr.strip())
 
 
 def show_container_status():
     """Display status of all test containers"""
     print_header("Test containers status")
-    
-    result = run_docker(['ps', '-a', '--filter', 'name=dmm-test-', '--format', 
-                        'table {{.Names}}\t{{.Status}}\t{{.Image}}'])
-    
+
+    result = run_docker(['ps', '-a', '--filter', 'name=dmm-test-', '--format', '{{.Names}}\t{{.Status}}\t{{.Image}}'])
+
     if result.returncode == 0:
         print(result.stdout)
     else:
-        print(f"{Colors.RED}Failed to get container status{Colors.ENDC}")
-    
-    # Also show resource usage
-    print(f"\n{Colors.BOLD}Resource usage:{Colors.ENDC}\n")
-    stats_result = run_docker(['stats', '--no-stream', '--format',
-                              'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}',
-                              '--filter', 'name=dmm-test-'])
-    
-    if stats_result.returncode == 0:
-        print(stats_result.stdout)
+        print('Failed to get container status')
 
 
 def main(argv=None):
@@ -286,25 +141,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description='Create test Docker containers for docker-monitor-manager',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
+    epilog='''
 Examples:
-  dmm-test                    # Create all test containers
-  dmm-test --cleanup          # Remove all test containers
-  dmm-test --status           # Show status of test containers
-  dmm-test --cpu --memory     # Create only CPU and memory stress containers
-        '''
+  dmm-test            # Create normal test containers
+  dmm-test --cleanup  # Remove test containers
+  dmm-test --status   # Show status of test containers
+    '''
     )
     
-    parser.add_argument('--cleanup', action='store_true',
-                       help='Remove all test containers')
-    parser.add_argument('--status', action='store_true',
-                       help='Show status of test containers')
-    parser.add_argument('--cpu', action='store_true',
-                       help='Create only CPU stress container')
-    parser.add_argument('--memory', action='store_true',
-                       help='Create only memory stress container')
-    parser.add_argument('--all', action='store_true',
-                       help='Create all test containers (default)')
+    parser.add_argument('--cleanup', action='store_true', help='Remove all test containers')
+    parser.add_argument('--status', action='store_true', help='Show status of test containers')
     
     args = parser.parse_args(argv)
     
@@ -331,19 +177,9 @@ Examples:
     
     # Cleanup before creating new containers
     cleanup_existing_test_containers()
-    
-    # Create containers based on arguments
-    if args.cpu:
-        create_cpu_stress_container()
-    elif args.memory:
-        create_memory_stress_container()
-    elif args.all or not (args.cpu or args.memory):
-        # Create all by default
-        create_normal_containers()
-        create_cpu_stress_container()
-        create_memory_stress_container()
-        create_cloneable_containers()
-        create_stopped_container()
+
+    # Create normal containers
+    create_normal_containers()
     
     # Show final status
     time.sleep(2)  # Wait a bit for containers to settle

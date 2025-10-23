@@ -40,6 +40,7 @@ from docker_monitor.utils.docker_utils import (
     RAM_LIMIT,
     CLONE_NUM,
     SLEEP_TIME,
+    AUTO_SCALE_ENABLED,
     calculate_cpu_percent,
     calculate_ram_percent,
     get_container_stats,
@@ -49,6 +50,7 @@ from docker_monitor.utils.docker_utils import (
     monitor_thread,
     docker_events_listener
 )
+from docker_monitor.utils.worker import run_in_thread
 
 
 class DockerMonitorApp(tk.Tk):
@@ -179,18 +181,9 @@ class DockerMonitorApp(tk.Tk):
         self.create_log_widgets(logs_frame)
         self.create_terminal_widgets(terminal_frame)
 
-        # --- Start background tasks ---
-        self.update_container_list()
-        # Start network update loop (keeps network tab fresh)
-        self.update_network_list()
-        # Start images update loop
-        self.update_images_list()
-        # Start volumes update loop
-        self.update_volumes_list()
-        self.update_logs()
-        
-        # Update status bar with counts
-        self.update_status_bar()
+    # Background tasks are started explicitly once the main loop is running.
+    # This avoids scheduling tk callbacks from background threads before
+    # Tk's main loop is active (which can raise "main thread is not in main loop").
 
     def _set_window_icon(self):
         """Set window icon from installed icon files or package assets."""
@@ -1776,7 +1769,8 @@ class DockerMonitorApp(tk.Tk):
             # Refresh containers
             self.force_refresh_containers()
             # Refresh networks
-            threading.Thread(target=self._fetch_networks_for_refresh, daemon=True).start()
+            from docker_monitor.utils.worker import run_in_thread
+            run_in_thread(self._fetch_networks_for_refresh, on_done=None, on_error=lambda e: logging.error(f"Network refresh failed: {e}"), tk_root=None, block=False)
             # Refresh images and volumes directly
             self.update_images_list()
             self.update_volumes_list()
@@ -1923,8 +1917,23 @@ class DockerMonitorApp(tk.Tk):
 
     def update_volumes_list(self):
         """Update volumes list periodically."""
+        # Use shared thread pool for fetches
+        def _fetch():
+            return VolumeManager.fetch_volumes()
+
+        def _on_done(vol_list):
+            self._on_volumes_fetched(vol_list)
+
+        def _on_error(e):
+            logging.error(f"Error updating volumes list: {e}")
+
+        run_in_thread(_fetch, on_done=_on_done, on_error=_on_error, tk_root=self)
+        # Schedule next poll
+        self.after(5000, self.update_volumes_list)
+
+    def _on_volumes_fetched(self, vol_list):
+        """Handle volumes fetched by background thread (runs on main thread)."""
         try:
-            vol_list = VolumeManager.fetch_volumes()
             # Store all volumes for filtering
             self._all_volumes = vol_list
             self._update_volumes_from_list(vol_list)
@@ -1932,9 +1941,7 @@ class DockerMonitorApp(tk.Tk):
             if hasattr(self, 'volumes_search_var') and self.volumes_search_var.get():
                 self.filter_volumes()
         except Exception as e:
-            logging.error(f"Error updating volumes list: {e}")
-        finally:
-            self.after(5000, self.update_volumes_list)
+            logging.error(f"Error applying fetched volumes to UI: {e}")
 
     def run_volume_action(self, action):
         """Execute a volume action."""
@@ -1958,8 +1965,23 @@ class DockerMonitorApp(tk.Tk):
 
     def update_images_list(self):
         """Update images list periodically."""
+        # Use shared thread pool for fetches
+        def _fetch():
+            return ImageManager.fetch_images()
+
+        def _on_done(img_list):
+            self._on_images_fetched(img_list)
+
+        def _on_error(e):
+            logging.error(f"Error updating images list: {e}")
+
+        run_in_thread(_fetch, on_done=_on_done, on_error=_on_error, tk_root=self)
+        # Schedule next poll
+        self.after(5000, self.update_images_list)
+
+    def _on_images_fetched(self, img_list):
+        """Handle images fetched by background thread (runs on main thread)."""
         try:
-            img_list = ImageManager.fetch_images()
             # Store all images for filtering
             self._all_images = img_list
             self._update_images_from_list(img_list)
@@ -1967,9 +1989,7 @@ class DockerMonitorApp(tk.Tk):
             if hasattr(self, 'images_search_var') and self.images_search_var.get():
                 self.filter_images()
         except Exception as e:
-            logging.error(f"Error updating images list: {e}")
-        finally:
-            self.after(5000, self.update_images_list)
+            logging.error(f"Error applying fetched images to UI: {e}")
 
     def run_image_action(self, action):
         """Handle image actions."""
@@ -1977,11 +1997,10 @@ class DockerMonitorApp(tk.Tk):
         if action == 'pull':
             repo = simpledialog.askstring('Pull Image', 'Enter repository:tag')
             if repo:
-                threading.Thread(
-                    target=ImageManager.pull_image, 
-                    args=(repo, self.update_images_list), 
-                    daemon=True
-                ).start()
+                # Run pull in thread pool to avoid creating many raw threads
+                def _pull():
+                    ImageManager.pull_image(repo, self.update_images_list)
+                run_in_thread(_pull, on_done=None, on_error=lambda e: logging.error(f"Error pulling image: {e}"), tk_root=self)
             return
         
         if not sel:
@@ -2206,8 +2225,24 @@ class DockerMonitorApp(tk.Tk):
 
     def update_network_list(self):
         """Update network list periodically."""
+        # Fetch networks in background to avoid blocking Tk main loop
+        def _worker():
+            try:
+                net_list = NetworkManager.fetch_networks()
+                # Schedule UI update on main thread
+                self.after(0, lambda: self._apply_network_list(net_list))
+            except Exception as e:
+                logging.error(f"Error fetching network list in background: {e}")
+            finally:
+                # Re-schedule the periodic call on the main thread
+                self.after(5000, self.update_network_list)
+
+        from docker_monitor.utils.worker import run_in_thread
+        # Use non-blocking enqueue for periodic fetches
+        run_in_thread(_worker, on_done=None, on_error=lambda e: logging.error(f"Network worker failed: {e}"), tk_root=None, block=False)
+
+    def _apply_network_list(self, net_list):
         try:
-            net_list = NetworkManager.fetch_networks()
             # Store all networks for filtering
             self._all_networks = net_list
             self._update_network_from_list(net_list)
@@ -2215,9 +2250,7 @@ class DockerMonitorApp(tk.Tk):
             if hasattr(self, 'network_search_var') and self.network_search_var.get():
                 self.filter_networks()
         except Exception as e:
-            logging.error(f"Error updating network list: {e}")
-        finally:
-            self.after(5000, self.update_network_list)
+            logging.error(f"Error applying network list: {e}")
 
     def _fetch_networks_for_refresh(self):
         """Fetch networks for manual refresh."""
@@ -2230,7 +2263,8 @@ class DockerMonitorApp(tk.Tk):
         if tab == 'Containers':
             self.force_refresh_containers()
         elif tab == 'Network':
-            threading.Thread(target=self._fetch_networks_for_refresh, daemon=True).start()
+            from docker_monitor.utils.worker import run_in_thread
+            run_in_thread(self._fetch_networks_for_refresh, on_done=None, on_error=lambda e: logging.error(f"Network refresh failed: {e}"), tk_root=None, block=False)
 
     def run_network_action(self, action):
         selected_items = self.network_tree.selection()
@@ -2332,7 +2366,8 @@ class DockerMonitorApp(tk.Tk):
         self.update_idletasks()
         
         # Start background thread
-        threading.Thread(target=fetch_and_show, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(fetch_and_show, on_done=None, on_error=lambda e: logging.error(f"Fetch containers failed: {e}"), tk_root=None, block=False)
     
     def _show_connect_dialog(self, net, all_containers):
         """Show the container selection dialog (runs in main thread)."""
@@ -2511,7 +2546,8 @@ class DockerMonitorApp(tk.Tk):
         self.update_idletasks()
         
         # Start background thread
-        threading.Thread(target=fetch_and_show, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(fetch_and_show, on_done=None, on_error=lambda e: logging.error(f"Fetch connected containers failed: {e}"), tk_root=None, block=False)
     
     def _show_disconnect_dialog(self, net, connected_containers):
         """Show the disconnect dialog (runs in main thread)."""
@@ -2681,7 +2717,8 @@ class DockerMonitorApp(tk.Tk):
         """Immediately fetches all container stats and updates the GUI tree."""
         logging.info("User requested manual container list refresh.")
         # Run the blocking Docker API calls in a separate thread
-        threading.Thread(target=self._fetch_all_stats_for_refresh, daemon=True).start()
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(self._fetch_all_stats_for_refresh, on_done=None, on_error=lambda e: logging.error(f"Manual refresh failed: {e}"), tk_root=None, block=False)
 
     def _fetch_all_stats_for_refresh(self):
         """Worker function for the manual refresh thread."""
@@ -2732,10 +2769,16 @@ class DockerMonitorApp(tk.Tk):
         sleep_entry = tk.Entry(frame, textvariable=sleep_var, fg="black")
         sleep_entry.grid(row=3, column=1, sticky="ew")
 
+        # Auto-scale toggle
+        auto_var = tk.BooleanVar(value=bool(AUTO_SCALE_ENABLED))
+        ttk.Label(frame, text="Auto-scale").grid(row=4, column=0, sticky="w", pady=5)
+        auto_check = ttk.Checkbutton(frame, variable=auto_var, text="Enable automatic scaling")
+        auto_check.grid(row=4, column=1, sticky="w")
+
         frame.columnconfigure(1, weight=1)
 
         def save_config():
-            global CPU_LIMIT, RAM_LIMIT, CLONE_NUM, SLEEP_TIME
+            global CPU_LIMIT, RAM_LIMIT, CLONE_NUM, SLEEP_TIME, AUTO_SCALE_ENABLED
             try:
                 new_cpu = float(cpu_var.get())
                 new_ram = float(ram_var.get())
@@ -2746,30 +2789,39 @@ class DockerMonitorApp(tk.Tk):
                 RAM_LIMIT = new_ram
                 CLONE_NUM = new_clones
                 SLEEP_TIME = new_sleep
+                AUTO_SCALE_ENABLED = bool(auto_var.get())
 
-                logging.info(f"Configuration updated: CPU={new_cpu}%, RAM={new_ram}%, Clones={new_clones}, Interval={new_sleep}s")
+                logging.info(f"Configuration updated: CPU={new_cpu}%, RAM={new_ram}%, Clones={new_clones}, Interval={new_sleep}s, Auto-scale={AUTO_SCALE_ENABLED}")
                 config_window.destroy()
             except ValueError:
                 logging.error("Invalid configuration value. Please enter valid numbers.")
                 # Optionally show an error message in the dialog
 
         button_frame = ttk.Frame(frame)
-        button_frame.grid(row=4, column=0, columnspan=2, pady=20)
+        button_frame.grid(row=5, column=0, columnspan=2, pady=20)
         ttk.Button(button_frame, text="Save", command=save_config).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Cancel", command=config_window.destroy).pack(side=tk.LEFT, padx=5)
 
     def _update_tree_from_stats(self, stats_list):
         """Helper function to update the Treeview from a list of stats."""
-        # Store all containers data for filtering
+        # Coalesce rapid updates: store latest stats and debounce the UI update
         self._all_containers = stats_list
-        
-        # Apply filter if search is active
+
+        # If search/filter is active, apply filter immediately on main thread
         if hasattr(self, 'container_search_var') and self.container_search_var.get():
             self.filter_containers()
             return
-            
-        # Update tree with all containers
-        self._apply_containers_to_tree(stats_list)
+
+        # Debounce actual tree update to avoid frequent reflows
+        try:
+            # Cancel previous pending update if exists
+            if hasattr(self, '_container_update_after_id') and self._container_update_after_id:
+                self.after_cancel(self._container_update_after_id)
+        except Exception:
+            pass
+
+        # Schedule a single update after 200ms to batch quick successive events
+        self._container_update_after_id = self.after(200, lambda: self._apply_containers_to_tree(self._all_containers))
     
     def _apply_containers_to_tree(self, stats_list):
         """Apply container list to tree view."""
@@ -2855,7 +2907,8 @@ class DockerMonitorApp(tk.Tk):
     
     def update_status_bar(self):
         """Update status bar with system information."""
-        try:
+        # Use shared thread pool to fetch system counts
+        def _fetch():
             with docker_lock:
                 containers = client.containers.list(all=True)
                 running = sum(1 for c in containers if c.status == 'running')
@@ -2863,18 +2916,38 @@ class DockerMonitorApp(tk.Tk):
                 images = len(client.images.list())
                 volumes = len(client.volumes.list())
                 networks = len(client.networks.list())
-                
+            return (running, total, images, volumes, networks)
+
+        def _on_done(result):
+            running, total, images, volumes, networks = result
             status_text = f"Ready | 🐳 Docker: {running}/{total} containers running | 🖼️ {images} images | 💾 {volumes} volumes | 🌐 {networks} networks"
             self.status_bar.config(text=status_text)
-        except Exception as e:
-            self.status_bar.config(text=f"Error: {str(e)}")
-        finally:
-            self.after(5000, self.update_status_bar)
+
+        def _on_error(e):
+            logging.error(f"Error updating status bar: {e}")
+
+        run_in_thread(_fetch, on_done=_on_done, on_error=_on_error, tk_root=self)
+        # Schedule next update
+        self.after(5000, self.update_status_bar)
     
     def set_status(self, message, duration=3000):
         """Set temporary status message."""
         self.status_bar.config(text=message, fg='#00ff88')
         self.after(duration, self.update_status_bar)
+
+    def start_background_tasks(self):
+        """Start background polling tasks. Called after mainloop is running."""
+        try:
+            # Containers, networks, images, volumes, logs and status updates
+            self.update_container_list()
+            self.update_network_list()
+            self.update_images_list()
+            self.update_volumes_list()
+            self.update_logs()
+            self.update_status_bar()
+            logging.info("Background tasks started")
+        except Exception as e:
+            logging.error(f"Failed to start background tasks: {e}")
 
 
 def main():
@@ -2898,15 +2971,24 @@ def main():
             print("="*60 + "\n")
     
     # Start the background monitoring thread
+    # Start the long-lived monitoring and event listener threads. These are long-running loops
+    # and are intentionally started as raw daemon threads at process init.
     monitor = threading.Thread(target=monitor_thread, daemon=True)
     monitor.start()
     
-    # Start the Docker events listener thread for real-time updates
     events_listener = threading.Thread(target=docker_events_listener, daemon=True)
     events_listener.start()
 
     # Start the Tkinter GUI
     app = DockerMonitorApp()
+    # Defer starting background polling to after the main loop starts so
+    # tk_root.after can be safely used from worker callbacks.
+    try:
+        app.after(100, getattr(app, 'start_background_tasks', lambda: None))
+    except Exception:
+        # If scheduling fails, continue — background tasks will be started elsewhere
+        pass
+
     app.mainloop()
 
 

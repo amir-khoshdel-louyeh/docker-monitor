@@ -42,6 +42,10 @@ class ContainerManager:
                     # First stop, then forcefully remove to avoid conflicts.
                     container.stop()
                     container.remove(force=True)
+                    # Schedule a cleanup to reclaim resources after removal
+                    from docker_monitor.utils.worker import run_in_thread
+                    from docker_monitor.utils.docker_utils import docker_cleanup
+                    run_in_thread(docker_cleanup, on_done=None, on_error=lambda e: logging.error(f"Cleanup failed: {e}"), tk_root=None, block=False)
                 elif hasattr(container, action):
                     getattr(container, action)()
             except Exception as e:
@@ -75,7 +79,8 @@ class ContainerManager:
                 logging.error(f"Error during global '{action}': {e}")
             finally:
                 if action in ['stop', 'remove']:
-                    threading.Thread(target=docker_cleanup, daemon=True).start()
+                    from docker_monitor.utils.worker import run_in_thread
+                    run_in_thread(docker_cleanup, on_done=None, on_error=lambda e: logging.error(f"Cleanup failed: {e}"), tk_root=None, block=False)
 
     @staticmethod
     def stop_all_containers(status_bar_callback=None, log_callback=None):
@@ -118,8 +123,9 @@ class ContainerManager:
                 logging.error(f"Error stopping all containers: {e}")
                 if status_bar_callback:
                     status_bar_callback("❌ Error stopping containers")
-        
-        threading.Thread(target=stop_all, daemon=True).start()
+        # Run the stop_all function in the shared worker so the UI/main thread is not blocked.
+        from docker_monitor.utils.worker import run_in_thread
+        run_in_thread(stop_all, on_done=None, on_error=lambda e: logging.error(f"stop_all failed: {e}"), tk_root=None, block=False)
 
     @staticmethod
     def apply_containers_to_tree(tree, stats_list, tree_tags_configured, bg_color, frame_bg):
@@ -226,97 +232,124 @@ class ContainerManager:
             container_name: Name of the container
             placeholder_label: Placeholder label to hide
         """
+        # Hide placeholder immediately (UI change)
         try:
-            # Hide placeholder when showing info
             placeholder_label.pack_forget()
-            
-            with docker_lock:
-                container = client.containers.get(container_name)
-                info = container.attrs
-            
-            # Clear existing content
-            info_text.config(state='normal')
-            info_text.delete('1.0', tk.END)
-            
-            # Title
-            info_text.insert(tk.END, f"Container: {container_name}\n", 'title')
-            info_text.insert(tk.END, "=" * 80 + "\n\n")
-            
-            # Basic Info Section
-            info_text.insert(tk.END, "📦 BASIC INFORMATION\n", 'section')
-            ContainerManager._add_info_line(info_text, "ID", info.get('Id', 'N/A')[:12])
-            ContainerManager._add_info_line(info_text, "Name", info.get('Name', '').lstrip('/'))
-            ContainerManager._add_info_line(info_text, "Status", info.get('State', {}).get('Status', 'unknown'))
-            ContainerManager._add_info_line(info_text, "Image", info.get('Config', {}).get('Image', 'N/A'))
-            ContainerManager._add_info_line(info_text, "Created", info.get('Created', 'N/A'))
-            ContainerManager._add_info_line(info_text, "Platform", info.get('Platform', 'N/A'))
-            info_text.insert(tk.END, "\n")
-            
-            # Network Info Section
-            info_text.insert(tk.END, "🌐 NETWORK INFORMATION\n", 'section')
-            networks = info.get('NetworkSettings', {}).get('Networks', {})
-            if networks:
-                for net_name, net_info in networks.items():
-                    ContainerManager._add_info_line(info_text, f"Network", net_name)
-                    ContainerManager._add_info_line(info_text, f"  ├─ IP Address", net_info.get('IPAddress', 'N/A'))
-                    ContainerManager._add_info_line(info_text, f"  ├─ Gateway", net_info.get('Gateway', 'N/A'))
-                    ContainerManager._add_info_line(info_text, f"  └─ MAC Address", net_info.get('MacAddress', 'N/A'))
-            else:
-                info_text.insert(tk.END, "  No networks attached\n")
-            
-            # Port bindings
-            ports = info.get('NetworkSettings', {}).get('Ports', {})
-            if ports:
-                info_text.insert(tk.END, "\n")
-                ContainerManager._add_info_line(info_text, "Port Bindings", "")
-                for container_port, host_bindings in ports.items():
-                    if host_bindings:
-                        for binding in host_bindings:
-                            ContainerManager._add_info_line(info_text, f"  {container_port}", f"{binding.get('HostIp', '0.0.0.0')}:{binding.get('HostPort', '')}")
-            info_text.insert(tk.END, "\n")
-            
-            # Volumes Section
-            info_text.insert(tk.END, "💾 VOLUMES\n", 'section')
-            mounts = info.get('Mounts', [])
-            if mounts:
-                for mount in mounts:
-                    mount_type = mount.get('Type', 'N/A')
-                    source = mount.get('Source', 'N/A')
-                    destination = mount.get('Destination', 'N/A')
-                    ContainerManager._add_info_line(info_text, "Mount", f"{mount_type}")
-                    ContainerManager._add_info_line(info_text, "  ├─ Source", source)
-                    ContainerManager._add_info_line(info_text, "  └─ Destination", destination)
-            else:
-                info_text.insert(tk.END, "  No volumes mounted\n")
-            info_text.insert(tk.END, "\n")
-            
-            # Environment Variables
-            info_text.insert(tk.END, "🔧 ENVIRONMENT VARIABLES\n", 'section')
-            env_vars = info.get('Config', {}).get('Env', [])
-            if env_vars:
-                for env in env_vars[:10]:  # Limit to first 10
-                    info_text.insert(tk.END, f"  {env}\n", 'value')
-                if len(env_vars) > 10:
-                    info_text.insert(tk.END, f"  ... and {len(env_vars) - 10} more\n", 'value')
-            else:
-                info_text.insert(tk.END, "  No environment variables\n")
-            
-            # Configure tags for styling
-            info_text.tag_config('title', foreground='#00ff88', font=('Segoe UI', 14, 'bold'))
-            info_text.tag_config('section', foreground='#00ADB5', font=('Segoe UI', 12, 'bold'))
-            info_text.tag_config('key', foreground='#FFD700', font=('Segoe UI', 10, 'bold'))
-            info_text.tag_config('value', foreground='#EEEEEE', font=('Segoe UI', 10))
-            
-            info_text.config(state='disabled')
-            
-        except Exception as e:
-            logging.error(f"Error displaying container info: {e}")
-            info_text.config(state='normal')
-            info_text.delete('1.0', tk.END)
-            info_text.insert(tk.END, f"Error loading container information:\n{str(e)}", 'error')
-            info_text.tag_config('error', foreground='#e74c3c', font=('Segoe UI', 11))
-            info_text.config(state='disabled')
+        except Exception:
+            pass
 
+        # Use shared worker to fetch container attrs and render in main thread
+        from docker_monitor.utils.worker import run_in_thread
+
+        def _fetch():
+            with docker_lock:
+                try:
+                    container = client.containers.get(container_name)
+                    return container.attrs
+                except Exception as e:
+                    # Convert NotFound into a sentinel None so the on_done
+                    # renderer can show a friendly message instead of propagating
+                    # exceptions back through the worker scheduling (which may
+                    # fail if the Tk mainloop isn't available).
+                    import docker as _docker
+                    if isinstance(e, getattr(_docker.errors, 'NotFound', Exception)):
+                        logging.debug(f"Container {container_name} disappeared before fetch: {e}")
+                        return None
+                    raise
+
+        def _render_info(info):
+            try:
+                if info is None:
+                    ContainerManager._show_error(info_text, f"Container '{container_name}' not found")
+                    return
+                info_text.config(state='normal')
+                info_text.delete('1.0', tk.END)
+
+                info_text.insert(tk.END, f"Container: {container_name}\n", 'title')
+                info_text.insert(tk.END, "=" * 80 + "\n\n")
+
+                # Basic Info Section
+                info_text.insert(tk.END, "\nBASIC INFORMATION\n", 'section')
+                ContainerManager._add_info_line(info_text, "ID", info.get('Id', 'N/A')[:12])
+                ContainerManager._add_info_line(info_text, "Name", info.get('Name', '').lstrip('/'))
+                ContainerManager._add_info_line(info_text, "Status", info.get('State', {}).get('Status', 'unknown'))
+                ContainerManager._add_info_line(info_text, "Image", info.get('Config', {}).get('Image', 'N/A'))
+                ContainerManager._add_info_line(info_text, "Created", info.get('Created', 'N/A'))
+                ContainerManager._add_info_line(info_text, "Platform", info.get('Platform', 'N/A'))
+                info_text.insert(tk.END, "\n")
+
+                # Network Info Section
+                info_text.insert(tk.END, "NETWORK INFORMATION\n", 'section')
+                networks = info.get('NetworkSettings', {}).get('Networks', {})
+                if networks:
+                    for net_name, net_info in networks.items():
+                        ContainerManager._add_info_line(info_text, f"Network", net_name)
+                        ContainerManager._add_info_line(info_text, f"  \u251c\u2500 IP Address", net_info.get('IPAddress', 'N/A'))
+                        ContainerManager._add_info_line(info_text, f"  \u251c\u2500 Gateway", net_info.get('Gateway', 'N/A'))
+                        ContainerManager._add_info_line(info_text, f"  \u2514\u2500 MAC Address", net_info.get('MacAddress', 'N/A'))
+                else:
+                    info_text.insert(tk.END, "  No networks attached\n")
+
+                # Port bindings
+                ports = info.get('NetworkSettings', {}).get('Ports', {})
+                if ports:
+                    info_text.insert(tk.END, "\n")
+                    ContainerManager._add_info_line(info_text, "Port Bindings", "")
+                    for container_port, host_bindings in ports.items():
+                        if host_bindings:
+                            for binding in host_bindings:
+                                ContainerManager._add_info_line(info_text, f"  {container_port}", f"{binding.get('HostIp', '0.0.0.0')}:{binding.get('HostPort', '')}")
+                info_text.insert(tk.END, "\n")
+
+                # Volumes Section
+                info_text.insert(tk.END, "VOLUMES\n", 'section')
+                mounts = info.get('Mounts', [])
+                if mounts:
+                    for mount in mounts:
+                        mount_type = mount.get('Type', 'N/A')
+                        source = mount.get('Source', 'N/A')
+                        destination = mount.get('Destination', 'N/A')
+                        ContainerManager._add_info_line(info_text, "Mount", f"{mount_type}")
+                        ContainerManager._add_info_line(info_text, "  \u251c\u2500 Source", source)
+                        ContainerManager._add_info_line(info_text, "  \u2514\u2500 Destination", destination)
+                else:
+                    info_text.insert(tk.END, "  No volumes mounted\n")
+                info_text.insert(tk.END, "\n")
+
+                # Environment Variables
+                info_text.insert(tk.END, "ENVIRONMENT VARIABLES\n", 'section')
+                env_vars = info.get('Config', {}).get('Env', [])
+                if env_vars:
+                    for env in env_vars[:10]:  # Limit to first 10
+                        info_text.insert(tk.END, f"  {env}\n", 'value')
+                    if len(env_vars) > 10:
+                        info_text.insert(tk.END, f"  ... and {len(env_vars) - 10} more\n", 'value')
+                else:
+                    info_text.insert(tk.END, "  No environment variables\n")
+
+                # Configure tags for styling
+                info_text.tag_config('title', foreground='#00ff88', font=('Segoe UI', 14, 'bold'))
+                info_text.tag_config('section', foreground='#00ADB5', font=('Segoe UI', 12, 'bold'))
+                info_text.tag_config('key', foreground='#FFD700', font=('Segoe UI', 10, 'bold'))
+                info_text.tag_config('value', foreground='#EEEEEE', font=('Segoe UI', 10))
+
+                info_text.config(state='disabled')
+            except Exception as e:
+                logging.error(f"Error rendering container info: {e}")
+                ContainerManager._show_error(info_text, f"Error rendering container information: {e}")
+
+        def _on_error(e):
+            logging.error(f"Error fetching container info: {e}")
+            info_text.after(0, lambda: ContainerManager._show_error(info_text, f"Error loading container information: {e}"))
+
+        run_in_thread(_fetch, on_done=lambda info: _render_info(info), on_error=_on_error, tk_root=info_text)
+
+    @staticmethod
+    def _show_error(info_text, message):
+        info_text.config(state='normal')
+        info_text.delete('1.0', tk.END)
+        info_text.insert(tk.END, f"Error: {message}\n")
+        info_text.config(state='disabled')
     @staticmethod
     def _add_info_line(info_text, key, value):
         """Helper to add a key-value line to info text.
